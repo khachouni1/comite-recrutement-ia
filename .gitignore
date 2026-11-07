@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# Fichiers régénérés par  python scripts/run_all.py
+data/processed/
+models/*.joblib
+
+# Système
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+variable,test,p_value,significatif_5%
+RecruitmentStrategy,Chi2,1.688371967153838e-72,True
+EducationLevel,Mann-Whitney,2.694010326178279e-15,True
+PersonalityScore,Mann-Whitney,1.2059264463075974e-11,True
+SkillScore,Mann-Whitney,3.1327189523091127e-09,True
+InterviewScore,Mann-Whitney,1.2310556025487644e-08,True
+ExperienceYears,Mann-Whitney,0.00020803031189707202,True
+PreviousCompanies,Mann-Whitney,0.36241422121052047,False
+Gender,Chi2,0.6529830350793309,False
+DistanceFromCompany,Mann-Whitney,0.6738806524509156,False
+Age,Mann-Whitney,0.8936063094586322,False

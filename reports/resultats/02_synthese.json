@@ -1,0 +1,9 @@
+{
+  "acp_axes_kaiser": 4,
+  "acp_variance_2_axes_%": 31.08,
+  "clustering_k": 2,
+  "clustering_silhouette": 0.1118,
+  "anomalies_log_epsilon": -14.566,
+  "anomalies_train": 21,
+  "anomalies_test": 2
+}

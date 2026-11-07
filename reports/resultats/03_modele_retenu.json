@@ -1,0 +1,28 @@
+{
+  "modele": "Gradient Boosting",
+  "hyperparametres": {
+    "learning_rate": 0.1,
+    "max_depth": 2,
+    "n_estimators": 100
+  },
+  "variables": [
+    "ExperienceYears",
+    "PreviousCompanies",
+    "DistanceFromCompany",
+    "InterviewScore",
+    "SkillScore",
+    "PersonalityScore",
+    "EducationLevel",
+    "RecruitmentStrategy"
+  ],
+  "auc_val": 0.933,
+  "auc_val_avec_attributs_proteges": 0.9335,
+  "test": {
+    "ROC-AUC": 0.9243,
+    "Accuracy": 0.9111,
+    "Accuracy équilibrée": 0.8963,
+    "Précision": 0.8571,
+    "Rappel": 0.8571,
+    "F1": 0.8571
+  }
+}

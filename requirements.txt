@@ -1,0 +1,13 @@
+# Versions avec lesquelles le projet a été exécuté et testé (Python 3.13)
+numpy==2.2.1
+pandas==2.2.3
+scipy==1.18.1
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+xgboost==3.4.1
+shap==0.54.1
+matplotlib==3.10.0
+seaborn==0.13.2
+streamlit==1.66.1
+joblib==1.6.0
+pytest==9.2.0

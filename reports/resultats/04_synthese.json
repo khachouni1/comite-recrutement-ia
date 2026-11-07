@@ -1,0 +1,57 @@
+{
+  "ahp": {
+    "poids": {
+      "score_technique": 0.4554,
+      "score_experience": 0.2628,
+      "score_rh": 0.1409,
+      "score_predictif": 0.1409
+    },
+    "lambda_max": 4.0104,
+    "CI": 0.0035,
+    "CR": 0.0038,
+    "coherent": true
+  },
+  "nb_places": 70,
+  "decisions": {
+    "Non retenu": 126,
+    "Recommandé": 60,
+    "Écarté (véto)": 29,
+    "À examiner": 10
+  },
+  "precision_selection": 0.6,
+  "auc_topsis": 0.7791,
+  "auc_wsm": 0.8147,
+  "audit_ethique": {
+    "disparate_impact": {
+      "Genre": {
+        "taux_selection": {
+          "Femme": 0.308,
+          "Homme": 0.314
+        },
+        "DI": 0.984,
+        "conforme": true
+      },
+      "Tranche_age": {
+        "taux_selection": {
+          "30-39": 0.329,
+          "< 30": 0.28,
+          "≥ 40": 0.324
+        },
+        "DI": 0.851,
+        "conforme": true
+      }
+    },
+    "proxies": {
+      "score_technique ~ Gender": 0.004,
+      "score_technique ~ Age": 0.015,
+      "score_experience ~ Gender": 0.03,
+      "score_experience ~ Age": 0.021,
+      "score_rh ~ Gender": -0.056,
+      "score_rh ~ Age": -0.004,
+      "score_predictif ~ Gender": 0.078,
+      "score_predictif ~ Age": 0.05
+    },
+    "alertes": [],
+    "conforme": true
+  }
+}
