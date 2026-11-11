@@ -1,0 +1,4 @@
+jeu,paires,CV distincts,offres distinctes,Non adapté,Potentiel,Adapté
+Train,5434,634,238,50.5%,25.3%,24.1%
+Validation,806,391,42,49.1%,22.2%,28.7%
+Test,1759,477,71,48.7%,25.2%,26.0%

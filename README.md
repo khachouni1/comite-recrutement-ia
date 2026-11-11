@@ -1,105 +1,124 @@
-# Comité multi-agents & méthodes MCDM pour l'aide à la sélection de candidats
+# Comité de recrutement multi-agents : évaluer un CV face à une offre d'emploi
 
 **École Centrale de Casablanca — Ingénierie Machine Learning & Statistique — Sujet n° 11**
 
 > *Système multi-agents fondé sur les méthodes MCDM pour l'aide à la sélection de candidats en entreprise.*
 
-## L'idée en une phrase
+## Ce que fait le projet
 
-Plusieurs **agents spécialisés** (technique, expérience, RH, prédictif) évaluent chaque candidat. Chacun a **appris
-sur les données** et argumente son avis. Un **coordinateur** agrège ces avis avec des méthodes multicritères
-(**AHP** pour les poids, **TOPSIS** pour le classement, comparé à la baseline **WSM**). Deux agents de **contrôle**
-vérifient la qualité des dossiers et l'**équité** de la décision.
+Un **site web** reçoit une **offre d'emploi** et un **CV** (texte, PDF ou Word). Un comité d'agents évalue le candidat
+critère par critère, puis rend une décision argumentée :
 
 ```
-                 ┌──────────── AGENTS ÉVALUATEURS (notent /100 + confiance + arguments) ────────────┐
-   candidat ───► │  Lead Tech   │  Expérience   │  RH & savoir-être   │  Prédictif ML (sans genre/âge) │
-                 └──────────────────────────────────────┬──────────────────────────────────────────┘
-                                                        ▼
-   ┌───────────────── COORDINATEUR ─────────────────────────────────────────────────────┐
-   │ percentiles → désaccords │ véto (Tech, RH) │ poids AHP (CR < 0.10) │ WSM vs TOPSIS   │──► Recommandé
-   └────────────────────────────────────────────────────────────────────────────────────┘    À examiner
-        ▲ signalements                                         │ sélection                    Écarté (véto)
-   ┌────┴──────────────────┐                     ┌──────────────▼──────────────┐              Non retenu
-   │ Agent Anomalies       │                     │ Agent Éthique : contrefactuel,│
-   │ (gaussienne multiv.)  │                     │ règle des 4/5, proxies        │
-   └───────────────────────┘                     └───────────────────────────────┘
+ CV + offre ──► nettoyage + ANONYMISATION ──► extraction des critères + similarités textuelles
+                                                         │
+     ┌──────────────────── 6 AGENTS ÉVALUATEURS (note /100 + confiance + arguments) ─────────────────────┐
+     │ 🛠️ Technique │ 📈 Expérience │ 🎓 Formation │ 🤝 Soft skills │ 🎯 Adéquation │ 🤖 Avis prédictif (ML) │
+     └───────────────────────────────────────────┬─────────────────────────────────────────────────────┘
+                                                 ▼
+     COORDINATEUR : véto ▸ poids AHP (CR < 0.10) ▸ score TOPSIS (baseline : WSM) ▸ seuils calibrés
+                    ▸ désaccord avec l'agent prédictif → « À examiner » ▸ contrôles (anomalies, éthique)
+                                                 ▼
+               ✅ Recommandé   🟠 À examiner   ❌ Non retenu   ⛔ Écarté (véto)
 ```
+
+Le site permet aussi de **classer plusieurs CV pour une même offre** avec TOPSIS, et de saisir ses propres priorités.
 
 ## Démarche : 4 étapes, chacune reliée au cours
 
 | Étape | Script | Contenu | Cours |
 |---|---|---|---|
-| 1 | `scripts/01_eda.py` | Contrôle qualité, découpage **Train/Val/Test avant prétraitement**, statistiques, tests de Mann-Whitney et du χ², figures | C1 slides 84-86 |
-| 2 | `scripts/02_non_supervise.py` | **ACP** (Kaiser, cercle des corrélations), **K-Means & CAH de Ward** (coude, silhouette, Davies-Bouldin, Calinski-Harabasz), **détection d'anomalies gaussienne** | C2 slides 17-85 |
-| 3 | `scripts/03_supervise.py` | Baselines (naïve, logistique) vs arbre, forêt, Gradient Boosting, XGBoost ; **SMOTE** dans le pipeline ; hyperparamètres choisis par **validation croisée**, modèle choisi sur **Val**, réentraînement sur Train+Val, **un seul passage sur Test** ; courbe d'apprentissage ; **SHAP, permutation, analyse des erreurs** | C1 slides 44-59, 84-88 |
-| 4 | `scripts/04_comite_mcdm.py` | Agents, **AHP**, **WSM** (baseline) vs **TOPSIS**, confrontation aux décisions réelles, **audit éthique**, **sensibilité** des poids | Sujet 11 |
+| 1 | `01_donnees_eda.py` | 8 000 paires CV/offre étiquetées ; anonymisation ; découpage **par offre** (pas de fuite) ; extraction de critères par règles ; tests de Kruskal-Wallis | C1 : préparation des données, Three-Way Holdout |
+| 2 | `02_representation_non_supervise.py` | TF-IDF (baseline) → **LSA = ACP du texte** → embeddings Hugging Face ; comparaison des représentations ; **K-Means et CAH** des CV en familles de métiers (silhouette, Davies-Bouldin, Calinski-Harabasz) | C2 : ACP, clustering ; consigne : Hugging Face |
+| 3 | `03_supervise.py` | Classification à 3 classes : baseline naïve, **régression softmax** (baseline), arbre, forêt, Gradient Boosting, XGBoost ; **SMOTE** ; validation croisée **groupée par offre** ; choix sur Val, réentraînement sur Train + Val, un seul passage sur Test ; courbe d'apprentissage ; **SHAP, permutation, analyse des erreurs** | C1 : softmax, SMOTE, validation croisée, interprétabilité |
+| 4 | `04_comite_mcdm.py` | Agents appris sur les données, **AHP**, **TOPSIS** contre **WSM**, seuils calibrés sur Val, évaluation globale et **par offre** (NDCG), test éthique contrefactuel, sensibilité des poids, **anomalies gaussiennes** | Sujet 11 ; C2 : anomalies |
 
-## Résultats clés (jeu de test, 225 candidats)
+## Résultats clés (Test : 1 759 paires, 71 offres jamais vues)
 
-**Modèles supervisés** (le genre et l'âge sont exclus, ce qui ne coûte rien : AUC Val 0,933 contre 0,933 avec ces variables)
+**Représentation du texte (Validation)** : la similarité par embeddings Hugging Face (AUC 0,66) mesure mieux
+l'adéquation que TF-IDF (0,66) et LSA (0,64), mais l'écart est faible. Le clustering des CV fait ressortir
+**12 familles de métiers interprétables** (comptabilité, tests et qualité, Java/web, électricité, SQL/ETL, réseau,
+big data…). L'accord entre K-Means et la CAH est de 0,65 (ARI).
 
-| Modèle | ROC-AUC | Accuracy | F1 |
+**Modèles supervisés** (3 classes)
+
+| Modèle | AUC macro | AUC adéquat vs non | F1 macro |
 |---|---|---|---|
-| Régression logistique (baseline) | 0,904 | 0,853 | 0,776 |
-| **Gradient Boosting** (retenu sur Val) | **0,924** | **0,911** | **0,857** |
+| Régression softmax (baseline), 17 variables explicables | 0,595 | 0,633 | 0,395 |
+| **XGBoost, variables explicables + interactions d'embeddings** | **0,688** | **0,729** | **0,428** |
 
-**Comité multi-agents**
-- Sélection de 70 candidats : **60 % sont réellement embauchés**, contre 31 % pour une sélection au hasard. Parmi les « Recommandés », 65 % ont été embauchés, contre 18 % des « Non retenus ».
-- Audit éthique conforme : Disparate Impact de 0,98 pour le genre et de 0,85 pour l'âge, et 225 tests contrefactuels sur 225 réussis.
-- La short-list est robuste : elle est conservée à 89 % ou plus quand un poids varie de ± 50 %, sauf si le poids technique est divisé par deux.
-- Classement face aux décisions réelles : AUC de 0,78 pour TOPSIS, 0,82 pour WSM et 0,92 pour le modèle ML seul (discuté ci-dessous).
+**Comité multi-agents (6 critères, AHP CR = 0,006)**
 
-**Ce que révèlent les données** (et que le rapport doit discuter honnêtement)
-- La variable `RecruitmentStrategy` domine les décisions historiques (SHAP, permutation, χ²). Elle reflète la manière dont le candidat a été recruté, pas ses compétences.
-- Les variables sont presque indépendantes : l'ACP ne compresse pas l'information et il n'y a pas de clusters naturels (silhouette de 0,11, accord K-Means/CAH avec un indice de Rand ajusté de 0,00).
-- Le modèle ML **reproduit les décisions passées**, alors que le comité MCDM **applique la politique choisie par l'entreprise** (Technique > Expérience > RH). C'est pour cela que le comité a une AUC plus faible : il ne cherche pas à imiter l'historique, mais à rendre une décision justifiée, pondérée explicitement et auditable.
+| Méthode | AUC adéquat vs non | NDCG@5 par offre |
+|---|---|---|
+| **TOPSIS (comité)** | **0,692** | **0,668** |
+| WSM (baseline MCDM) | 0,680 | 0,643 |
+| Meilleur expert explicable seul (adéquation) | 0,619 | 0,598 |
+| Avis prédictif ML seul | 0,727 | 0,644 |
+
+- **TOPSIS bat la baseline WSM**, et le comité fait mieux que chacun des 5 experts explicables pris seul.
+- **Pour classer les candidats d'une même offre** (ce que fait un recruteur), le comité est le meilleur (NDCG@5).
+- **Les décisions sont graduées** : parmi les « Recommandés », 71 % sont réellement adéquats ; parmi les « Écartés
+  (véto) », 72 % ne sont pas adaptés.
+- **Éthique** : 30 tests contrefactuels sur 30 réussis. Ajouter un genre, un âge ou une situation familiale au CV ne
+  change aucune note.
+
+**Lecture honnête** : prédire l'adéquation d'un CV à une offre reste difficile sur ce jeu de données. Les classes
+« potentiel » et « adapté » sont très proches, ce qui donne une F1 macro d'environ 0,43. Le système est un **outil
+d'aide** : il trie et argumente, et la décision finale revient à un humain (zone « À examiner »).
 
 ## Installation et exécution
 
 ```bash
 pip install -r requirements.txt
-python scripts/run_all.py          # les 4 étapes (environ 2 minutes)
-streamlit run app/app.py           # démonstration interactive
-python -m pytest                   # 16 tests unitaires
+python scripts/run_all.py          # télécharge les données puis exécute les 4 étapes (~30 min)
+streamlit run app/app.py           # le site web
+python -m pytest                   # tests unitaires
 ```
 
-Chaque étape peut aussi être lancée seule (`python scripts/03_supervise.py`). Les sorties vont dans :
-- `reports/figures/` : 21 figures numérotées dans l'ordre de la démarche ;
-- `reports/resultats/` : tableaux CSV et synthèses JSON de chaque étape ;
-- `models/` : le modèle final et le comité entraîné.
+Au premier lancement, le modèle d'embeddings `all-MiniLM-L6-v2` (88 Mo) est téléchargé depuis Hugging Face.
+Pour travailler hors ligne, placez-le dans `models/all-MiniLM-L6-v2/`.
 
 ## Structure du projet
 
 ```text
 Projet_ML_Sujet11/
-├── data/
-│   ├── README.md                 source, dictionnaire des variables, traitements
-│   └── raw/recruitment_data.csv
-├── src/recrutement/              le code, organisé en modules courts
-│   ├── config.py                 TOUTES les constantes (chemins, variables, matrice AHP, seuils)
-│   ├── data.py                   chargement + découpage Train/Val/Test
-│   ├── preprocessing.py          pipeline : standardisation, one-hot, SMOTE
-│   ├── eda.py                    analyse exploratoire
-│   ├── unsupervised.py           ACP, clustering, anomalies gaussiennes
-│   ├── supervised.py             catalogue de modèles, sélection, métriques
-│   ├── explain.py                SHAP, permutation, analyse des erreurs
+├── app/app.py                    le site web (Streamlit)
+├── data/README.md                source, licence, traitements ; raw/cv_offres/{train,test}.csv
+├── scripts/                      00 (téléchargement) → 04 + run_all.py : la démarche pas à pas
+├── src/recrutement/
+│   ├── config.py                 TOUTES les constantes (critères, matrice AHP, seuils)
+│   ├── data.py                   chargement, anonymisation, découpage par offre
+│   ├── texte.py · lexiques.py    lecture PDF / Word, nettoyage, anonymisation, extraction par règles
+│   ├── features.py               variables de chaque paire CV / offre
+│   ├── representation.py         TF-IDF, LSA, embeddings, similarité cosinus
+│   ├── eda.py · unsupervised.py  analyse exploratoire, clustering, anomalies gaussiennes
+│   ├── supervised.py · explain.py modèles, sélection, SHAP, permutation, erreurs
 │   ├── mcdm/                     ahp.py · wsm.py · topsis.py · sensitivity.py
-│   └── agents/
-│       ├── base.py               classe Agent + Avis (note, confiance, arguments)
-│       ├── evaluateurs.py        Lead Tech, Expérience, RH, Prédictif ML
-│       ├── controle.py           Anomalies, Éthique
-│       └── coordinateur.py       délibération, véto, désaccords, AHP, WSM/TOPSIS, décision
-├── scripts/                      01 → 04 + run_all.py : la démarche pas à pas
-├── app/app.py                    application Streamlit
-├── tests/                        tests unitaires (MCDM, données, agents)
-└── reports/figures, reports/resultats
+│   └── agents/                   base · evaluateurs · controle · coordinateur
+├── tests/                        texte, MCDM, données, comité
+└── reports/figures · reports/resultats
 ```
 
 ## Choix méthodologiques à retenir pour l'oral
 
-1. **Pas de fuite de données** : le découpage se fait sur les données brutes, et chaque transformation (standardisation, SMOTE) est apprise dans un pipeline, uniquement sur la partie entraînement.
-2. **Rôle de chaque jeu** : Train sert à apprendre, Val à choisir (modèle, seuils, vérification de la méthode MCDM), Test à mesurer une seule fois.
-3. **Des agents qui apprennent** : les poids internes de chaque expert sont des coefficients de régression logistique appris sur les données, pas des pondérations inventées.
-4. **Équité par construction, puis vérifiée** : le genre et l'âge ne sont jamais utilisés pour noter. L'agent Éthique le vérifie par un test contrefactuel et contrôle la sélection avec la règle des 4/5.
-5. **Humain dans la boucle** : quand les agents sont en désaccord ou qu'un dossier est atypique, la décision est « À examiner » au lieu d'une décision automatique.
+1. **Pas de fuite de données** : un même CV apparaît dans plusieurs paires, donc le découpage et la validation croisée sont faits **par offre**. Le Test ne contient que des postes jamais vus, comme sur le site.
+2. **Rôle de chaque jeu** : Train sert à apprendre, Validation à choisir (modèle, seuils de décision), Test à mesurer une seule fois.
+3. **Des agents explicables qui apprennent** : chaque agent extrait des éléments lisibles (compétences trouvées et manquantes, années exigées et détectées…) et apprend sur les données comment les noter.
+4. **Équité par construction** : le CV est anonymisé avant l'évaluation, et l'agent Éthique le vérifie par un test contrefactuel (ajout d'un genre, d'un âge ou d'une situation familiale → les notes ne bougent pas).
+5. **Humain dans la boucle** : en cas de zone grise, de désaccord avec l'agent prédictif ou de dossier atypique, la décision est « À examiner ».
+
+## Limites
+
+- Les données et le comité sont **en anglais**.
+- Le jeu de données ne déclare pas de licence et ne contient pas d'attributs démographiques : il n'y a donc pas d'audit d'équité par groupe, seulement des tests contrefactuels.
+- Les noms propres ne sont pas anonymisés, car il faudrait un modèle de reconnaissance d'entités nommées.
+- Les lexiques de compétences couvrent les métiers du jeu de données (informatique, data, finance, santé, ingénierie…).
+- **Choix du modèle** : la Validation ne compte que 42 offres, ce qui rend son estimation bruitée. Le modèle est donc
+  choisi sur l'AUC en validation croisée groupée (238 offres), et la Validation sert de contrôle. Ce critère a été fixé
+  après une première exécution, et un essai exploratoire des interactions d'embeddings avait été mesuré sur le Test :
+  c'est une petite entorse au protocole, signalée par transparence.
+- **Surapprentissage** : XGBoost atteint une AUC de 1,00 sur ses données d'entraînement contre 0,68 en validation
+  croisée. La généralisation reste stable, mais une régularisation plus forte serait une piste d'amélioration.
+
+La version 1 du projet, sur des données tabulaires, reste disponible via le tag Git `v1-tabulaire`.

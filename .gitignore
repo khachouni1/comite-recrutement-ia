@@ -9,6 +9,8 @@ venv/
 # Fichiers régénérés par  python scripts/run_all.py
 data/processed/
 models/*.joblib
+models/all-MiniLM-L6-v2/
+data/raw/cv_offres/*.csv
 
 # Système
 .DS_Store

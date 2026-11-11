@@ -1,73 +1,74 @@
 """
-Configuration centrale du projet.
+Configuration centrale du projet (version 2 : CV et offres d'emploi en texte).
 
-Toutes les constantes (chemins, variables, paramètres) sont définies ICI et nulle part ailleurs.
-Pour modifier une hypothèse du projet (ex. la matrice AHP), il suffit de modifier ce fichier.
+Toutes les constantes sont définies ICI : pour changer une hypothèse (matrice AHP, seuils...),
+on modifie ce fichier et on relance le pipeline.
 """
 from pathlib import Path
 
 # --------------------------------------------------------------------------- chemins
 ROOT = Path(__file__).resolve().parents[2]
-DATA_RAW = ROOT / "data" / "raw" / "recruitment_data.csv"
+RAW_DIR = ROOT / "data" / "raw" / "cv_offres"
 DATA_PROCESSED = ROOT / "data" / "processed"
 MODELS_DIR = ROOT / "models"
 FIGURES_DIR = ROOT / "reports" / "figures"
 RESULTS_DIR = ROOT / "reports" / "resultats"
-
 for _d in (DATA_PROCESSED, MODELS_DIR, FIGURES_DIR, RESULTS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
-# --------------------------------------------------------------------------- reproductibilité
 RANDOM_STATE = 42
+VAL_SIZE = 0.15  # part des OFFRES du jeu d'entraînement officiel réservée à la validation
 
-# --------------------------------------------------------------------------- découpage (Cours 1, slides 84-86)
-TEST_SIZE = 0.15   # 15 % test
-VAL_SIZE = 0.15    # 15 % validation  -> 70 % entraînement
+# --------------------------------------------------------------------------- cible
+LABELS = ["No Fit", "Potential Fit", "Good Fit"]          # ordre croissant d'adéquation
+LABEL_TO_INT = {lab: i for i, lab in enumerate(LABELS)}   # 0, 1, 2
+LABELS_FR = {"No Fit": "Non adapté", "Potential Fit": "Potentiel", "Good Fit": "Adapté"}
 
-# --------------------------------------------------------------------------- variables
-TARGET = "HiringDecision"
+# --------------------------------------------------------------------------- représentation du texte
+EMBEDDING_HUB_ID = "sentence-transformers/all-MiniLM-L6-v2"   # Hugging Face, 384 dimensions
+_LOCAL_MODEL = MODELS_DIR / "all-MiniLM-L6-v2"                 # copie locale (fonctionne hors ligne)
+EMBEDDING_MODEL = str(_LOCAL_MODEL) if (_LOCAL_MODEL / "model.safetensors").exists() else EMBEDDING_HUB_ID
+LSA_COMPONENTS = 100                                         # réduction de dimension du TF-IDF (SVD)
 
-NUMERIC_FEATURES = [
-    "Age", "ExperienceYears", "PreviousCompanies", "DistanceFromCompany",
-    "InterviewScore", "SkillScore", "PersonalityScore",
-]
-ORDINAL_FEATURES = ["EducationLevel"]           # 1 < 2 < 3 < 4 : gardée numérique
-CATEGORICAL_FEATURES = ["RecruitmentStrategy"]  # 1 / 2 / 3 : codage one-hot
-BINARY_FEATURES = ["Gender"]
-ALL_FEATURES = NUMERIC_FEATURES + ORDINAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
-
-# Attributs protégés : interdits pour NOTER un candidat, utilisés uniquement pour l'AUDIT d'équité
-PROTECTED = ["Gender", "Age"]
-MODEL_FEATURES = [f for f in ALL_FEATURES if f not in PROTECTED]
-
-LABELS = {
-    "Age": "Âge", "Gender": "Genre", "EducationLevel": "Niveau d'études",
-    "ExperienceYears": "Années d'expérience", "PreviousCompanies": "Entreprises précédentes",
-    "DistanceFromCompany": "Distance (km)", "InterviewScore": "Entretien",
-    "SkillScore": "Test technique", "PersonalityScore": "Personnalité",
-    "RecruitmentStrategy": "Stratégie de recrutement", "HiringDecision": "Embauché",
+# --------------------------------------------------------------------------- variables par agent
+# Chaque agent n'observe que SES variables (extraites du texte anonymisé).
+AGENT_FEATURES = {
+    "score_technique": ["couverture_hard", "n_hard_communs", "n_hard_cv"],
+    "score_experience": ["annees_cv", "ratio_annees", "exigence_annees_connue"],
+    "score_formation": ["diplome_cv", "ecart_diplome", "exigence_diplome_connue"],
+    "score_soft_skills": ["couverture_soft", "n_soft_communs", "n_soft_cv"],
+    "score_adequation": ["sim_embedding", "sim_lsa", "sim_tfidf"],
 }
+FEATURES = sorted({f for fs in AGENT_FEATURES.values() for f in fs}) + ["longueur_cv", "longueur_offre"]
 
-# --------------------------------------------------------------------------- comité multi-agents & MCDM
-# Ordre des critères = ordre des lignes/colonnes de la matrice AHP (source unique de vérité).
-CRITERIA = ["score_technique", "score_experience", "score_rh", "score_predictif"]
+# --------------------------------------------------------------------------- MCDM
+# 5 critères notés par des agents experts explicables + 1 critère noté par l'agent prédictif (ML).
+# L'ajout du 6e critère a été décidé sur la VALIDATION : le comité à 6 critères (AUC 0.76) y dépasse
+# chacun de ses agents pris seul, y compris l'agent ML (0.74), et le comité à 5 critères (0.73).
+CRITERIA = list(AGENT_FEATURES) + ["score_predictif"]
 CRITERIA_LABELS = {
-    "score_technique": "Technique",
+    "score_technique": "Compétences techniques",
     "score_experience": "Expérience",
-    "score_rh": "RH & savoir-être",
-    "score_predictif": "Prédictif (ML)",
+    "score_formation": "Formation",
+    "score_soft_skills": "Soft skills",
+    "score_adequation": "Adéquation au poste",
+    "score_predictif": "Avis prédictif (ML)",
 }
-# Échelle de Saaty : AHP_MATRIX[i][j] = importance du critère i par rapport au critère j
+# Matrice de Saaty : AHP_MATRIX[i][j] = importance du critère i par rapport au critère j
+# Jugement du comité : Technique ≈ Adéquation ≈ Avis prédictif > Expérience > Soft skills > Formation
 AHP_MATRIX = [
-    # Tech  Exp   RH    Préd
-    [1,    2,    3,    3],    # Technique
-    [1/2,  1,    2,    2],    # Expérience
-    [1/3,  1/2,  1,    1],    # RH
-    [1/3,  1/2,  1,    1],    # Prédictif
+    #  Tech  Exp   Form  Soft  Adéq  Préd
+    [1,    2,    4,    3,    1,    1],     # Technique
+    [1/2,  1,    3,    2,    1/2,  1/2],   # Expérience
+    [1/4,  1/3,  1,    1/2,  1/4,  1/4],   # Formation
+    [1/3,  1/2,  2,    1,    1/3,  1/3],   # Soft skills
+    [1,    2,    4,    3,    1,    1],     # Adéquation
+    [1,    2,    4,    3,    1,    1],     # Avis prédictif
 ]
 
-VETO_CRITERIA = ["score_technique", "score_rh"]  # agents cœur de métier pouvant opposer un véto
-VETO_PERCENTILE = 0.05       # véto si note < 5e percentile des notes du Train
-DISAGREEMENT_GAP = 0.80      # désaccord si (percentile max - percentile min) >= 0.80
-ANOMALY_CONTAMINATION = 0.02 # ε = quantile 2 % des densités du Train
-DI_THRESHOLD = 0.80          # règle des 4/5 (Disparate Impact)
+VETO_CRITERIA = ["score_technique", "score_adequation"]  # critères éliminatoires
+VETO_QUANTILE = 0.05        # véto si note < 5e percentile des candidats « Good Fit » du Train
+DISAGREEMENT_PROBA = 0.60   # désaccord si l'agent prédictif contredit le comité avec p ≥ 0.60
+PRECISION_RECO = 0.70       # zone « Recommandé » : ≥ 70 % de candidats adéquats (calibré sur Validation)
+PRECISION_REJET = 0.65      # zone « Non retenu » : ≥ 65 % de candidats non adaptés (calibré sur Validation)
+ANOMALY_CONTAMINATION = 0.02

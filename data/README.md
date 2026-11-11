@@ -2,39 +2,42 @@
 
 ## Source
 
-- **Jeu de données :** *Predicting Hiring Decisions in Recruitment Data* (auteur : Rabie El Kharoua), données ouvertes Kaggle
-- **Lien :** https://www.kaggle.com/datasets/rabieelkharoua/predicting-hiring-decisions-in-recruitment-data
-- **Fichier :** `raw/recruitment_data.csv` — 1 500 candidats × 11 colonnes, aucune valeur manquante, aucun doublon
+- **Jeu de données :** *resume-job-description-fit* (auteur : cnamuangtoun), Hugging Face
+- **Lien :** https://huggingface.co/datasets/cnamuangtoun/resume-job-description-fit
+- **Version utilisée :** commit `08978e21714984bb417547d2c0f9b477f5298163`
+- **Licence :** aucune licence n'est déclarée sur la page du jeu de données. Il est utilisé ici dans un cadre
+  pédagogique et non commercial ; à mentionner dans le rapport.
+- **Fichiers :** `raw/cv_offres/train.csv` (6 241 paires) et `raw/cv_offres/test.csv` (1 759 paires)
 
-> Les variables sont presque indépendantes entre elles : toutes les valeurs propres de l'ACP sont proches de 1
-> (étape 2). Ce comportement est typique d'un jeu de données **synthétique**. Il faut le confirmer sur la page Kaggle
-> et le mentionner dans le rapport.
+Pour retélécharger les fichiers :
 
-## Dictionnaire des variables
+```bash
+curl -L -o data/raw/cv_offres/train.csv https://huggingface.co/datasets/cnamuangtoun/resume-job-description-fit/resolve/08978e21714984bb417547d2c0f9b477f5298163/train.csv
+curl -L -o data/raw/cv_offres/test.csv https://huggingface.co/datasets/cnamuangtoun/resume-job-description-fit/resolve/08978e21714984bb417547d2c0f9b477f5298163/test.csv
+```
 
-| Variable | Type | Valeurs | Rôle dans le projet |
-|---|---|---|---|
-| `Age` | quantitative | 20 – 50 | **Attribut protégé** : utilisé uniquement pour l'audit d'équité |
-| `Gender` | binaire | 0 = femme, 1 = homme | **Attribut protégé** : utilisé uniquement pour l'audit d'équité |
-| `EducationLevel` | ordinale | 1 – 4 (plus élevé = diplôme plus élevé) | Agent Lead Tech, modèle ML |
-| `ExperienceYears` | quantitative | 0 – 15 ans | Agent Expérience, modèle ML |
-| `PreviousCompanies` | quantitative | 1 – 5 | Agent Expérience, modèle ML |
-| `DistanceFromCompany` | quantitative | 1 – 51 km | Modèle ML |
-| `InterviewScore` | quantitative | 0 – 100 | Agent RH, modèle ML |
-| `SkillScore` | quantitative | 0 – 100 | Agent Lead Tech, modèle ML |
-| `PersonalityScore` | quantitative | 0 – 100 | Agent RH, modèle ML |
-| `RecruitmentStrategy` | catégorielle | 1, 2, 3 (libellés : voir Kaggle) | Modèle ML (codage one-hot) |
-| `HiringDecision` | **cible** binaire | 0 = rejeté (69 %), 1 = embauché (31 %) | Vérité terrain |
+## Contenu
+
+| Colonne | Description |
+|---|---|
+| `resume_text` | Texte du CV (anglais) : environ 620 mots en médiane |
+| `job_description_text` | Texte de l'offre d'emploi (anglais) : environ 320 mots en médiane |
+| `label` | **Cible** : `No Fit` (≈ 50 %), `Potential Fit` (≈ 25 %), `Good Fit` (≈ 25 %) |
+
+Il y a seulement **643 CV et 351 offres distincts** : chaque CV est associé à plusieurs offres. Les métiers
+couverts sont l'informatique, la data, l'analyse métier, la comptabilité et la finance, la gestion de projet,
+la santé et l'ingénierie.
 
 ## Traitements effectués
 
-1. **Contrôle qualité** : valeurs manquantes, doublons et plages de valeurs (`reports/resultats/01_qualite.json`).
-2. **Découpage stratifié, fait avant tout prétraitement** : Train 70 % (1 049), Validation 15 % (226), Test 15 % (225).
-   Les fichiers produits sont `processed/train.csv`, `val.csv` et `test.csv`, et l'identifiant d'origine est conservé.
-3. **Prétraitement appris sur Train uniquement, à l'intérieur des pipelines** :
-   - standardisation des variables quantitatives et ordinales ;
-   - codage one-hot de `RecruitmentStrategy` ;
-   - SMOTE pour rééquilibrer les classes, appliqué seulement pendant l'entraînement.
-4. **Exclusion de `Gender` et `Age`** de toutes les notes et de tous les modèles. Ces variables servent uniquement à l'audit.
+1. **Doublons** : une paire en double est retirée.
+2. **Nettoyage** : séparation des mots collés (« SummaryCertified » devient « Summary Certified ») et normalisation des espaces.
+3. **Anonymisation** (`src/recrutement/texte.py`) : on retire les e-mails, téléphones, liens, dates de naissance, âges,
+   situations familiales, civilités, pronoms genrés, mentions de genre, de nationalité et de religion. **Limite :** les noms
+   propres ne sont pas retirés, car il faudrait un modèle de reconnaissance d'entités nommées.
+4. **Découpage** : le Test est le test officiel (71 offres). Le train officiel est découpé **par offre** en Train (85 %)
+   et Validation (15 %). Aucune offre n'est partagée entre les trois jeux.
+5. **Extraction de critères** par règles et lexiques : compétences, soft skills, années d'expérience, niveau de diplôme.
+6. **Représentations** apprises sur le Train : TF-IDF, LSA et embeddings Hugging Face (`all-MiniLM-L6-v2`).
 
-Le dossier `processed/` est régénéré par `python scripts/01_eda.py`.
+Le dossier `processed/` est régénéré par `python scripts/run_all.py`.

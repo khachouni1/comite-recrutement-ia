@@ -1,145 +1,135 @@
 """
-Agents ÉVALUATEURS : ils notent les candidats, chacun sur un critère MCDM.
+Agents ÉVALUATEURS : chacun note le candidat sur UN critère, à partir de ses propres variables.
 
-┌─────────────────┬──────────────────────────────────────┬──────────────────────────────────────────┐
-│ Agent           │ Variables observées                  │ Méthode (cours)                          │
-├─────────────────┼──────────────────────────────────────┼──────────────────────────────────────────┤
-│ Lead Tech       │ Test technique, niveau d'études      │ Régression logistique + SMOTE (Cours 1)  │
-│ Expérience      │ Années d'expérience, nb d'entreprises│ Régression logistique + SMOTE (Cours 1)  │
-│ RH              │ Entretien, test de personnalité      │ Régression logistique + SMOTE (Cours 1)  │
-│ Prédictif (ML)  │ Toutes sauf genre et âge             │ Meilleur modèle de l'étape 3 + SHAP      │
-└─────────────────┴──────────────────────────────────────┴──────────────────────────────────────────┘
+┌──────────────────────┬─────────────────────────────────────────────┬───────────────────────────────────┐
+│ Agent                │ Ce qu'il observe (extrait du texte)         │ Comment il note                   │
+├──────────────────────┼─────────────────────────────────────────────┼───────────────────────────────────┤
+│ Compétences techn.   │ compétences de l'offre retrouvées dans le CV│ régression logistique apprise     │
+│ Expérience           │ années détectées / années exigées           │ régression logistique apprise     │
+│ Formation            │ diplôme détecté / diplôme exigé             │ régression logistique apprise     │
+│ Soft skills          │ savoir-être demandés retrouvés dans le CV   │ régression logistique apprise     │
+│ Adéquation au poste  │ similarités TF-IDF, LSA, embeddings         │ régression logistique apprise     │
+│ Prédictif (ML)       │ toutes les variables                        │ meilleur modèle de l'étape 3      │
+└──────────────────────┴─────────────────────────────────────────────┴───────────────────────────────────┘
 
-Agents experts : au lieu de poids inventés à la main, chaque expert APPREND sur le Train
-comment ses variables influencent l'embauche :
-        p = σ(β0 + Σ βj · zj)           note = 100 · p
-La contribution βj · zj (en log-odds) de chaque variable fournit les arguments de l'avis
-(interprétabilité intrinsèque d'un modèle linéaire, Cours 1 slide 52).
+Chaque expert apprend sur le Train :  note = 100 · P(candidature au moins « potentielle » | ses variables).
+Ses poids internes sont donc APPRIS sur les données, et non fixés à la main.
 """
 import json
 
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from .. import config as C
+from ..lexiques import DEGREE_NAMES
 from ..preprocessing import build_pipeline
-from ..supervised import model_catalog
+from ..supervised import catalogue, score_attendu
 from .base import Agent, Avis
 
 
+def _verdict(note: float) -> str:
+    return ("très favorable" if note >= 75 else "favorable" if note >= 55
+            else "réservé" if note >= 35 else "défavorable")
+
+
 class AgentExpert(Agent):
-    SEUIL_ARGUMENT = 0.25  # contribution minimale (log-odds) pour devenir un argument
+    def __init__(self, critere: str):
+        self.critere = critere
+        self.nom = C.CRITERIA_LABELS[critere]
+        self.variables = C.AGENT_FEATURES[critere]
 
-    def __init__(self, nom: str, critere: str, variables: list):
-        super().__init__(variables)
-        self.nom, self.critere = nom, critere
-
-    def fit(self, train: pd.DataFrame) -> "AgentExpert":
-        self.pipeline = build_pipeline(LogisticRegression(max_iter=2000, random_state=C.RANDOM_STATE),
-                                       self.variables).fit(train[self.variables], train[C.TARGET])
-        self.prep = self.pipeline.named_steps["prep"]
-        noms = self.prep.get_feature_names_out()  # coefficients associés aux variables PAR NOM
-        self.coefs = dict(zip(noms, self.pipeline.named_steps["model"].coef_[0]))
-        self.entraine = True
+    def fit(self, feats: pd.DataFrame, y: pd.Series) -> "AgentExpert":
+        self.modele = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, random_state=C.RANDOM_STATE))
+        self.modele.fit(feats[self.variables], (y >= 1).astype(int))
+        coefs = self.modele[-1].coef_[0]
+        self.poids_appris = {v: round(float(abs(b) / np.abs(coefs).sum()), 3) for v, b in zip(self.variables, coefs)}
+        self.coefs = dict(zip(self.variables, coefs))
         return self
 
-    def poids_appris(self) -> dict:
-        """Importance relative de chaque variable pour cet agent (|β| normalisés)."""
-        tot = sum(abs(b) for b in self.coefs.values())
-        return {v: round(float(abs(b) / tot), 3) for v, b in self.coefs.items()}
+    def noter(self, feats: pd.DataFrame) -> np.ndarray:
+        return 100 * self.modele.predict_proba(feats[self.variables])[:, 1]
 
-    def noter(self, df: pd.DataFrame) -> np.ndarray:
-        return 100 * self.pipeline.predict_proba(df[self.variables])[:, 1]
-
-    def evaluer(self, candidat: dict) -> Avis:
-        x = pd.DataFrame([{v: candidat[v] for v in self.variables}])
-        p = float(self.pipeline.predict_proba(x)[0, 1])
-        z = dict(zip(self.prep.get_feature_names_out(), self.prep.transform(x)[0]))
-        contrib = {v: self.coefs[v] * z[v] for v in self.variables}
-        forts = [self.libelle(v, candidat[v]) for v, c in contrib.items() if c >= self.SEUIL_ARGUMENT]
-        faibles = [self.libelle(v, candidat[v]) for v, c in contrib.items() if c <= -self.SEUIL_ARGUMENT]
+    def evaluer(self, feats: pd.DataFrame, details: dict) -> Avis:
+        p = float(self.modele.predict_proba(feats[self.variables])[0, 1])
         note = 100 * p
-        verdict = ("très favorable" if note >= 70 else "favorable" if note >= 50
-                   else "réservé" if note >= 30 else "défavorable")
-        texte = f"Avis {verdict} ({note:.0f}/100)."
-        if forts:
-            texte += " Atouts : " + ", ".join(forts) + "."
-        if faibles:
-            texte += " Points faibles : " + ", ".join(faibles) + "."
-        return Avis(self.nom, round(note, 1), self.confiance(p), forts, faibles, texte,
-                    {"contributions_logodds": {k: round(v, 3) for k, v in contrib.items()}})
+        forts, faibles, texte = self._arguments(feats.iloc[0], details)
+        return Avis(self.nom, self.critere, round(note, 1), self.confiance(p), forts, faibles,
+                    f"Avis {_verdict(note)} ({note:.0f}/100). {texte}".strip())
 
-
-def agent_tech() -> AgentExpert:
-    return AgentExpert("Lead Tech", "score_technique", ["SkillScore", "EducationLevel"])
-
-
-def agent_experience() -> AgentExpert:
-    return AgentExpert("Expérience", "score_experience", ["ExperienceYears", "PreviousCompanies"])
-
-
-def agent_rh() -> AgentExpert:
-    return AgentExpert("RH", "score_rh", ["InterviewScore", "PersonalityScore"])
+    # arguments propres à chaque critère, lisibles par un recruteur
+    def _arguments(self, f: pd.Series, d: dict):
+        c = self.critere
+        if c == "score_technique":
+            forts, faibles = d["hard_trouvees"], d["hard_manquantes"]
+            n_req = len(forts) + len(faibles)
+            texte = (f"{len(forts)} compétence(s) demandée(s) sur {n_req} retrouvée(s) dans le CV."
+                     if n_req else "L'offre ne cite pas de compétence technique reconnue.")
+            return forts, faibles, texte
+        if c == "score_soft_skills":
+            forts, faibles = d["soft_trouvees"], d["soft_manquantes"]
+            n_req = len(forts) + len(faibles)
+            return forts, faibles, (f"{len(forts)} savoir-être demandé(s) sur {n_req} mis en avant dans le CV."
+                                    if n_req else "L'offre ne précise pas de savoir-être.")
+        if c == "score_experience":
+            a, req = d["annees_cv"], d["annees_exigees"]
+            if req is None:
+                return ([f"{a:.0f} ans d'expérience détectés"] if a else []), [], \
+                    f"{a:.0f} an(s) d'expérience détecté(s) ; l'offre ne fixe pas de minimum."
+            ok = a >= req
+            msg = f"{a:.0f} an(s) détecté(s) pour {req:.0f} exigé(s)."
+            return ([msg] if ok else []), ([] if ok else [msg]), msg
+        if c == "score_formation":
+            dc, dr = d["diplome_cv"], d["diplome_exige"]
+            msg = f"Diplôme détecté : {DEGREE_NAMES[dc]} ; exigé : {DEGREE_NAMES[dr]}."
+            ok = dr == 0 or dc >= dr
+            return ([msg] if ok and dc else []), ([] if ok else [msg]), msg
+        # adéquation
+        sim = f["sim_embedding"]
+        msg = f"Similarité sémantique CV / offre = {sim:.2f}."
+        return ([msg] if sim >= 0.5 else []), ([msg] if sim < 0.3 else []), msg
 
 
 class AgentPredictif(Agent):
     """
-    « Mémoire » des décisions passées : reprend le modèle et les hyperparamètres retenus à l'étape 3
-    (sélection sur Validation), ré-entraîné ici sur le Train seul. N'utilise ni le genre ni l'âge.
-    Justification locale par valeurs SHAP.
+    Reprend le modèle et les hyperparamètres retenus à l'étape 3, ré-entraîné sur le Train seul.
+    Il note le 6e critère (« avis prédictif ») : la mémoire des décisions passées.
     """
-    nom, critere = "Prédictif (ML)", "score_predictif"
-    SEUIL_SHAP = 0.15
+    nom, critere = "Avis prédictif (ML)", "score_predictif"
 
     def __init__(self):
-        super().__init__(C.MODEL_FEATURES)
         path = C.RESULTS_DIR / "03_modele_retenu.json"
         if not path.exists():
             raise FileNotFoundError("Exécutez d'abord  python scripts/03_supervise.py")
         self.config = json.loads(path.read_text(encoding="utf-8"))
+        self.variables = self.config["variables"]
 
-    def fit(self, train: pd.DataFrame) -> "AgentPredictif":
-        model, _ = model_catalog()[self.config["modele"]]
-        model.set_params(**self.config["hyperparametres"])
-        self.pipeline = build_pipeline(model, self.variables).fit(train[self.variables], train[C.TARGET])
-        self._explainer = None
-        self.entraine = True
+    def fit(self, feats: pd.DataFrame, y: pd.Series) -> "AgentPredictif":
+        model, _ = catalogue(riche=len(self.variables) > 50)[self.config["modele"]]
+        model = clone(model).set_params(**self.config["hyperparametres"])
+        self.modele = build_pipeline(model).fit(feats[self.variables], y)
         return self
 
-    def __getstate__(self):  # l'explainer SHAP n'est pas sauvegardé, il est recréé à la demande
-        return {k: v for k, v in self.__dict__.items() if k != "_explainer"} | {"_explainer": None}
+    def probas(self, feats: pd.DataFrame) -> np.ndarray:
+        return self.modele.predict_proba(feats[self.variables])
 
-    def noter(self, df: pd.DataFrame) -> np.ndarray:
-        return 100 * self.pipeline.predict_proba(df[self.variables])[:, 1]
+    def noter(self, feats: pd.DataFrame) -> np.ndarray:
+        return score_attendu(self.probas(feats))
 
-    def _shap(self, x: pd.DataFrame) -> dict:
-        import shap
-        prep, model = self.pipeline.named_steps["prep"], self.pipeline.named_steps["model"]
-        xt = pd.DataFrame(prep.transform(x), columns=prep.get_feature_names_out())
-        if self._explainer is None:
-            self._explainer = (shap.LinearExplainer(model, xt) if hasattr(model, "coef_")
-                               else shap.TreeExplainer(model))
-        vals = np.asarray(self._explainer.shap_values(xt))
-        vals = vals[..., 1] if vals.ndim == 3 else vals
-        # on regroupe les colonnes one-hot (RecruitmentStrategy_1, _2, _3) sous leur variable d'origine
-        out = {}
-        for col, v in zip(xt.columns, vals[0]):
-            base = next(f for f in self.variables if col == f or col.startswith(f + "_"))
-            out[base] = out.get(base, 0.0) + float(v)
-        return out
+    def evaluer(self, feats: pd.DataFrame, details: dict | None = None) -> Avis:
+        p = self.probas(feats)[0]
+        note = float(score_attendu(p[None, :])[0])
+        texte = (f"D'après les décisions passées : {p[2]:.0%} adapté, {p[1]:.0%} potentiel, "
+                 f"{p[0]:.0%} non adapté (score attendu {note:.0f}/100).")
+        return Avis(self.nom, self.critere, round(note, 1), round(float(p.max()), 3), texte=texte,
+                    details={"probas": {C.LABELS[k]: round(float(v), 3) for k, v in enumerate(p)}})
 
-    def evaluer(self, candidat: dict, expliquer: bool = True) -> Avis:
-        x = pd.DataFrame([{v: candidat[v] for v in self.variables}])
-        p = float(self.pipeline.predict_proba(x)[0, 1])
-        contrib = self._shap(x) if expliquer else {}
-        top = sorted(contrib.items(), key=lambda kv: -abs(kv[1]))[:4]
-        forts = [self.libelle(v, candidat[v]) for v, c in top if c >= self.SEUIL_SHAP]
-        faibles = [self.libelle(v, candidat[v]) for v, c in top if c <= -self.SEUIL_SHAP]
-        texte = f"Probabilité d'embauche d'après l'historique : {100 * p:.0f} %."
-        if forts:
-            texte += " Facteurs favorables (SHAP) : " + ", ".join(forts) + "."
-        if faibles:
-            texte += " Facteurs défavorables (SHAP) : " + ", ".join(faibles) + "."
-        return Avis(self.nom, round(100 * p, 1), self.confiance(p), forts, faibles, texte,
-                    {"shap": {k: round(v, 3) for k, v in contrib.items()}})
+
+def evaluateurs() -> dict:
+    """Les 6 agents notateurs, dans l'ordre des critères : 5 experts explicables + l'agent prédictif."""
+    agents = {c: AgentExpert(c) for c in C.AGENT_FEATURES}
+    agents["score_predictif"] = AgentPredictif()
+    return agents

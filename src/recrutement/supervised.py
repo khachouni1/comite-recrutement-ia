@@ -1,24 +1,28 @@
 """
-Apprentissage supervisé : classification binaire « embauché / rejeté » (Cours 1).
+Apprentissage supervisé : prédire l'étiquette d'une paire (non adapté / potentiel / adapté).
 
-Protocole (Three-Way Holdout + validation croisée, Cours 1 slides 84-88) :
-  1. Pour chaque modèle, hyperparamètres choisis par validation croisée stratifiée (5 plis) sur TRAIN.
-  2. Comparaison des modèles sur VALIDATION -> choix du meilleur modèle.
-  3. Ré-entraînement du modèle retenu sur TRAIN + VALIDATION.
-  4. Évaluation finale, une seule fois, sur TEST.
+Classification à 3 classes (Cours 1) :
+  - baseline naïve (classe majoritaire) ;
+  - baseline simple : régression softmax (logistique multinomiale, Cours 1 slides 77-82) ;
+  - modèles avancés : arbre, forêt aléatoire, gradient boosting, XGBoost.
 
-Modèles comparés : une baseline naïve, une baseline simple (régression logistique)
-et des modèles plus avancés (arbre, forêt aléatoire, gradient boosting, XGBoost).
+Protocole (Cours 1 slides 84-88) :
+  1. hyperparamètres par validation croisée 5 plis sur Train, plis GROUPÉS PAR OFFRE ;
+  2. choix du modèle sur Validation ;
+  3. ré-entraînement sur Train + Validation ;
+  4. une seule évaluation sur Test.
+
+Score d'adéquation attendu (utilisé par l'agent prédictif) :  100 · (0.5 · P(potentiel) + 1 · P(adapté)).
 """
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.base import clone
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (accuracy_score, f1_score, precision_score, recall_score, roc_auc_score,
-                             balanced_accuracy_score)
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
+from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
 from sklearn.tree import DecisionTreeClassifier
 
 from . import config as C
@@ -26,71 +30,89 @@ from .preprocessing import build_pipeline
 
 try:
     from xgboost import XGBClassifier
-except ImportError:  # XGBoost est optionnel
+except ImportError:
     XGBClassifier = None
 
 
-def model_catalog() -> dict:
-    """Modèles et grilles d'hyperparamètres (préfixe 'model__' = étape 'model' du pipeline)."""
+def catalogue(riche: bool = False) -> dict:
+    """
+    riche=False : modèles comparés sur les 17 variables explicables.
+    riche=True  : modèles adaptés aux 785 variables (avec interactions d'embeddings) :
+                  régression softmax régularisée et XGBoost (sous-échantillonnage des colonnes).
+    """
     rs = C.RANDOM_STATE
+    if riche:
+        cat = {"Régression softmax": (LogisticRegression(max_iter=3000, random_state=rs),
+                                      {"model__C": [0.003, 0.01, 0.03]})}
+        if XGBClassifier is not None:
+            cat["XGBoost"] = (XGBClassifier(n_estimators=300, subsample=0.8, colsample_bytree=0.5,
+                                            eval_metric="mlogloss", random_state=rs, n_jobs=-1, verbosity=0),
+                              {"model__max_depth": [3, 4], "model__learning_rate": [0.05, 0.1]})
+        return cat
     cat = {
         "Baseline naïve (classe majoritaire)": (DummyClassifier(strategy="most_frequent"), {}),
-        "Régression logistique (baseline)": (
-            LogisticRegression(max_iter=2000, random_state=rs),
-            {"model__C": [0.01, 0.1, 1, 10]}),
-        "Arbre de décision": (
-            DecisionTreeClassifier(random_state=rs),
-            {"model__max_depth": [3, 5, 8], "model__min_samples_leaf": [1, 10]}),
-        "Forêt aléatoire": (
-            RandomForestClassifier(n_estimators=300, random_state=rs, n_jobs=-1),
-            {"model__max_depth": [6, 10, None], "model__min_samples_leaf": [1, 5]}),
-        "Gradient Boosting": (
-            GradientBoostingClassifier(random_state=rs),
-            {"model__n_estimators": [100, 200], "model__max_depth": [2, 3],
-             "model__learning_rate": [0.05, 0.1]}),
+        "Régression softmax (baseline)": (LogisticRegression(max_iter=3000, random_state=rs),
+                                          {"model__C": [0.01, 0.1, 1, 10]}),
+        "Arbre de décision": (DecisionTreeClassifier(random_state=rs),
+                              {"model__max_depth": [4, 6, 10], "model__min_samples_leaf": [5, 20]}),
+        "Forêt aléatoire": (RandomForestClassifier(n_estimators=300, random_state=rs, n_jobs=-1),
+                            {"model__max_depth": [8, 14, None], "model__min_samples_leaf": [1, 5]}),
+        "Gradient Boosting": (GradientBoostingClassifier(random_state=rs),
+                              {"model__n_estimators": [150, 300], "model__max_depth": [2, 3],
+                               "model__learning_rate": [0.05, 0.1]}),
     }
     if XGBClassifier is not None:
-        cat["XGBoost"] = (
-            XGBClassifier(n_estimators=300, eval_metric="logloss", random_state=rs, n_jobs=-1, verbosity=0),
-            {"model__max_depth": [2, 3, 4], "model__learning_rate": [0.03, 0.1]})
+        cat["XGBoost"] = (XGBClassifier(n_estimators=300, eval_metric="mlogloss", random_state=rs, n_jobs=-1,
+                                        verbosity=0),
+                          {"model__max_depth": [3, 5], "model__learning_rate": [0.05, 0.1]})
     return cat
 
 
-def metrics(y_true, proba, threshold: float = 0.5) -> dict:
-    pred = (proba >= threshold).astype(int)
+def score_attendu(proba: np.ndarray) -> np.ndarray:
+    """Espérance de l'adéquation sur [0, 100] : non adapté = 0, potentiel = 50, adapté = 100."""
+    return 100 * (0.5 * proba[:, 1] + proba[:, 2])
+
+
+def metriques(y, proba) -> dict:
+    pred = proba.argmax(axis=1)
     return {
-        "ROC-AUC": roc_auc_score(y_true, proba) if len(np.unique(y_true)) > 1 else np.nan,
-        "Accuracy": accuracy_score(y_true, pred),
-        "Accuracy équilibrée": balanced_accuracy_score(y_true, pred),
-        "Précision": precision_score(y_true, pred, zero_division=0),
-        "Rappel": recall_score(y_true, pred, zero_division=0),
-        "F1": f1_score(y_true, pred, zero_division=0),
+        "AUC macro (OvR)": roc_auc_score(y, proba, multi_class="ovr", average="macro"),
+        "AUC adéquat vs non": roc_auc_score(np.asarray(y) > 0, proba[:, 1] + proba[:, 2]),
+        "F1 macro": f1_score(y, pred, average="macro"),
+        "Accuracy": accuracy_score(y, pred),
+        "Accuracy équilibrée": balanced_accuracy_score(y, pred),
+        "Spearman (score attendu)": spearmanr(score_attendu(proba), y)[0],
     }
 
 
-def tune_and_compare(X_train, y_train, X_val, y_val, features) -> tuple:
-    """Étapes 1 et 2 : validation croisée sur Train puis comparaison sur Validation."""
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=C.RANDOM_STATE)
-    rows, fitted = [], {}
-    for name, (model, grid) in model_catalog().items():
-        pipe = build_pipeline(model, features, use_smote=not isinstance(model, DummyClassifier))
-        search = GridSearchCV(pipe, grid or {"model__strategy": ["most_frequent"]},
-                              scoring="roc_auc", cv=cv, n_jobs=-1)
-        search.fit(X_train, y_train)
-        proba_val = search.best_estimator_.predict_proba(X_val)[:, 1]
-        m = metrics(y_val, proba_val)
-        rows.append({"Modèle": name, "AUC CV (Train)": search.best_score_,
-                     **{f"{k} (Val)": v for k, v in m.items()},
-                     "Hyperparamètres": {k.replace("model__", ""): v for k, v in search.best_params_.items()}})
-        fitted[name] = search.best_estimator_
-        print(f"   {name:38s} AUC CV = {search.best_score_:.3f} | AUC Val = {m['ROC-AUC']:.3f} | "
-              f"F1 Val = {m['F1']:.3f}")
-    table = pd.DataFrame(rows).sort_values("ROC-AUC (Val)", ascending=False).reset_index(drop=True)
-    return table, fitted
+def regler_et_comparer(f_tr, y_tr, g_tr, f_va, y_va, jeux: dict) -> tuple[pd.DataFrame, dict]:
+    """
+    jeux = {nom du jeu de variables: liste de colonnes}. Chaque modèle est réglé par validation croisée
+    groupée par offre sur Train, puis évalué sur Validation. Clé des modèles : « modèle — jeu ».
+    """
+    cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=C.RANDOM_STATE)
+    rows, modeles = [], {}
+    for nom_jeu, cols in jeux.items():
+        for nom, (model, grille) in catalogue(riche=len(cols) > 50).items():
+            pipe = build_pipeline(model, use_smote=not isinstance(model, DummyClassifier))
+            search = GridSearchCV(pipe, grille or {"model__strategy": ["most_frequent"]},
+                                  scoring="roc_auc_ovr", cv=cv, n_jobs=-1)
+            search.fit(f_tr[cols], y_tr, groups=g_tr)
+            m = metriques(y_va, search.best_estimator_.predict_proba(f_va[cols]))
+            cle = f"{nom} — {nom_jeu}"
+            rows.append({"Modèle": cle, "Algorithme": nom, "Variables": nom_jeu, "Nb variables": len(cols),
+                         "AUC CV (Train)": search.best_score_, **{f"{k} (Val)": v for k, v in m.items()},
+                         "Hyperparamètres": {k.replace("model__", ""): v for k, v in search.best_params_.items()}})
+            modeles[cle] = search.best_estimator_
+            print(f"   {cle:58s} AUC CV = {search.best_score_:.3f} | AUC Val = {m['AUC macro (OvR)']:.3f} | "
+                  f"F1 macro Val = {m['F1 macro']:.3f}")
+    # Critère de sélection : AUC en validation croisée groupée (5 plis, 238 offres) plutôt que l'AUC sur la
+    # seule Validation (42 offres), trop bruitée pour départager des modèles proches. La Validation sert de contrôle.
+    table = pd.DataFrame(rows).sort_values("AUC CV (Train)", ascending=False).reset_index(drop=True)
+    return table, modeles
 
 
-def refit_on_train_val(pipeline, X_train, y_train, X_val, y_val):
-    """Étape 3 : ré-entraînement du modèle retenu sur Train + Validation."""
-    final = clone(pipeline)
-    final.fit(pd.concat([X_train, X_val]), pd.concat([y_train, y_val]))
+def reentrainer(pipe, X_tr, y_tr, X_va, y_va):
+    final = clone(pipe)
+    final.fit(pd.concat([X_tr, X_va]), pd.concat([y_tr, y_va]))
     return final

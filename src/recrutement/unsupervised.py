@@ -1,193 +1,127 @@
 """
-Apprentissage non supervisé (Cours 2).
+Apprentissage non supervisé sur les textes (Cours 2).
 
-1. ACP — Analyse en Composantes Principales (slides 17-37)
-2. Clustering — K-Means et CAH de Ward (slides 38-62), évalués par inertie intra-classe,
-   silhouette, Davies-Bouldin et Calinski-Harabasz (slides 66-76), profilage (slide 77)
-3. Détection d'anomalies — Distribution Gaussienne Multivariée (slides 78-85)
-
-Toutes les méthodes sont ajustées sur le TRAIN uniquement.
+1. Réduction de dimension : LSA = SVD tronquée du TF-IDF (l'ACP appliquée au texte), éboulis de variance.
+2. Clustering des CV : K-Means et CAH de Ward dans l'espace LSA, choix de k par inertie intra-classe,
+   silhouette, Davies-Bouldin, Calinski-Harabasz ; profil des clusters (mots caractéristiques).
+3. Détection d'anomalies : distribution gaussienne multivariée sur les variables d'un CV (slides 82-85).
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.stats import multivariate_normal
 from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import (adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score,
                              silhouette_score)
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, normalize
 
 from . import config as C
-from .plots import save, COLOR_HIRED, COLOR_REJECTED
-
-# Variables décrivant le profil d'un candidat (hors attributs protégés et hors cible)
-PROFILE_FEATURES = ["EducationLevel", "ExperienceYears", "PreviousCompanies", "DistanceFromCompany",
-                    "InterviewScore", "SkillScore", "PersonalityScore"]
+from .plots import save
 
 
-# =========================================================================== 1. ACP
-def run_pca(train: pd.DataFrame, features=PROFILE_FEATURES) -> dict:
-    """
-    Étapes du cours (slide 33) : standardiser X, calculer S = XᵀX/(n-1),
-    valeurs propres λk (variance de chaque axe), vecteurs propres Uk (directions).
-    Critère de Kaiser : retenir les axes de valeur propre > 1.
-    """
-    scaler = StandardScaler().fit(train[features])
-    Z = scaler.transform(train[features])
-    pca = PCA(random_state=C.RANDOM_STATE).fit(Z)
-    coords = pca.transform(Z)
-    eigenvalues = pca.explained_variance_
-    # Corrélation variable / axe = Uk * sqrt(λk)  (slide 32 : interprétation des facteurs)
-    correlations = pd.DataFrame(pca.components_.T * np.sqrt(eigenvalues), index=features,
-                                columns=[f"PC{k + 1}" for k in range(len(features))])
-    table = pd.DataFrame({
-        "valeur_propre": eigenvalues,
-        "variance_expliquee_%": pca.explained_variance_ratio_ * 100,
-        "variance_cumulee_%": np.cumsum(pca.explained_variance_ratio_) * 100,
-    }, index=correlations.columns)
-    return {"pca": pca, "scaler": scaler, "coords": coords, "table": table,
-            "correlations": correlations, "n_kaiser": int((eigenvalues > 1).sum())}
-
-
-def plot_pca(res: dict, y: pd.Series) -> None:
-    table, corr, coords = res["table"], res["correlations"], res["coords"]
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
-
-    ax = axes[0]  # éboulis des valeurs propres
-    ax.bar(table.index, table["variance_expliquee_%"], color="#2e86de", label="Variance expliquée")
-    ax.plot(table.index, table["variance_cumulee_%"], "o-", color="#e67e22", label="Variance cumulée")
+# =========================================================================== 1. LSA
+def plot_lsa_variance(reps) -> pd.Series:
+    var = pd.Series(reps.lsa.explained_variance_ratio_, index=range(1, C.LSA_COMPONENTS + 1))
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(var.index, var.values * 100, color="#2e86de", label="Variance expliquée par axe")
     ax2 = ax.twinx()
-    ax2.plot(table.index, table["valeur_propre"], "s--", color="grey", label="Valeur propre")
-    ax2.axhline(1, color="red", ls=":", label="Kaiser (λ = 1)")
-    ax.set_title(f"Éboulis des valeurs propres — {res['n_kaiser']} axes retenus (Kaiser)")
-    ax.set_ylabel("% de variance")
-    ax2.set_ylabel("Valeur propre λ")
-    ax.legend(loc="center right", fontsize=8)
-    ax2.legend(loc="upper right", fontsize=8)
+    ax2.plot(var.index, var.cumsum() * 100, color="#e67e22", label="Variance cumulée")
     ax2.grid(False)
-
-    ax = axes[1]  # cercle des corrélations
-    ax.add_patch(plt.Circle((0, 0), 1, fill=False, color="grey"))
-    for f in corr.index:
-        x, yv = corr.loc[f, "PC1"], corr.loc[f, "PC2"]
-        ax.arrow(0, 0, x, yv, head_width=0.03, color="#c0392b", length_includes_head=True)
-        ax.text(x * 1.12, yv * 1.12, C.LABELS[f], ha="center", fontsize=8)
-    ax.axhline(0, color="grey", lw=0.5)
-    ax.axvline(0, color="grey", lw=0.5)
-    ax.set_xlim(-1.1, 1.1)
-    ax.set_ylim(-1.1, 1.1)
-    ax.set_aspect("equal")
-    ax.set_title("Cercle des corrélations (PC1 × PC2)")
-    ax.set_xlabel(f"PC1 ({table.iloc[0, 1]:.1f} %)")
-    ax.set_ylabel(f"PC2 ({table.iloc[1, 1]:.1f} %)")
-
-    ax = axes[2]  # projection des individus
-    ax.scatter(coords[:, 0], coords[:, 1], c=np.where(y.values == 1, COLOR_HIRED, COLOR_REJECTED), s=10, alpha=0.5)
-    ax.set_title("Projection des candidats (bleu = embauché, rouge = rejeté)")
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
-    save(fig, "06_acp")
+    ax.set_title(f"LSA (SVD du TF-IDF) : {C.LSA_COMPONENTS} axes = {var.sum():.0%} de la variance")
+    ax.set_xlabel("Axe (thème latent)")
+    ax.set_ylabel("% par axe")
+    ax2.set_ylabel("% cumulé")
+    save(fig, "04_lsa_variance")
+    return var
 
 
-# =========================================================================== 2. Clustering
-def evaluate_kmeans(Z: np.ndarray, k_range=range(2, 9)) -> pd.DataFrame:
-    """Inertie intra-classe (coude), silhouette (↑), Davies-Bouldin (↓), Calinski-Harabasz (↑)."""
+# =========================================================================== 2. clustering des CV
+def clustering_cv(cv_lsa: np.ndarray, k_range=range(2, 13)) -> dict:
+    Z = normalize(cv_lsa)  # norme 1 : la distance euclidienne devient équivalente au cosinus
     rows = []
     for k in k_range:
         km = KMeans(n_clusters=k, n_init=10, random_state=C.RANDOM_STATE).fit(Z)
-        rows.append({"k": k, "inertie_intra": km.inertia_,
-                     "silhouette": silhouette_score(Z, km.labels_),
+        rows.append({"k": k, "inertie_intra": km.inertia_, "silhouette": silhouette_score(Z, km.labels_),
                      "davies_bouldin": davies_bouldin_score(Z, km.labels_),
                      "calinski_harabasz": calinski_harabasz_score(Z, km.labels_)})
-    return pd.DataFrame(rows).set_index("k")
-
-
-def run_clustering(train: pd.DataFrame, features=PROFILE_FEATURES) -> dict:
-    Z = StandardScaler().fit_transform(train[features])
-    scores = evaluate_kmeans(Z)
-    # Règle de parcimonie : plus petit k dont la silhouette atteint 95 % du maximum
-    # (évite de retenir un grand k pour un gain de silhouette négligeable).
-    best_k = int(scores.index[scores["silhouette"] >= 0.95 * scores["silhouette"].max()].min())
+    scores = pd.DataFrame(rows).set_index("k")
+    best_k = int(scores["silhouette"].idxmax())
     km = KMeans(n_clusters=best_k, n_init=10, random_state=C.RANDOM_STATE).fit(Z)
     cah = AgglomerativeClustering(n_clusters=best_k, linkage="ward").fit(Z)
-    agreement = pd.crosstab(pd.Series(km.labels_, name="K-Means"), pd.Series(cah.labels_, name="CAH"))
-    ari = adjusted_rand_score(km.labels_, cah.labels_)
-    # Profil statistique de chaque cluster (slide 77) : effectif, moyennes, taux d'embauche
-    profile = train[features + [C.TARGET]].assign(cluster=km.labels_).groupby("cluster").mean()
-    profile.insert(0, "effectif", np.bincount(km.labels_))
-    return {"Z": Z, "scores": scores, "best_k": best_k, "kmeans_labels": km.labels_,
-            "cah_labels": cah.labels_, "agreement": agreement, "ari": float(ari), "profile": profile.round(2)}
+    return {"Z": Z, "scores": scores, "best_k": best_k, "kmeans": km, "labels": km.labels_,
+            "ari_cah": float(adjusted_rand_score(km.labels_, cah.labels_))}
 
 
-def plot_clustering(res: dict, pca_coords: np.ndarray) -> None:
+def mots_cles_clusters(res: dict, reps, n_mots: int = 8) -> dict:
+    """Mots caractéristiques : centroïde ramené dans l'espace TF-IDF via les axes de la LSA."""
+    termes = np.array(reps.tfidf.get_feature_names_out())
+    centres_tfidf = res["kmeans"].cluster_centers_ @ reps.lsa.components_
+    return {k: list(termes[np.argsort(c)[::-1][:n_mots]]) for k, c in enumerate(centres_tfidf)}
+
+
+def plot_clustering(res: dict, mots: dict, profil: pd.DataFrame) -> None:
     s = res["scores"]
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4.2))
-    for ax, col, better in zip(axes, ["inertie_intra", "silhouette", "davies_bouldin", "calinski_harabasz"],
-                               ["coude", "max", "min", "max"]):
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
+    for ax, col, sens in zip(axes, s.columns, ["coude", "max", "min", "max"]):
         ax.plot(s.index, s[col], "o-")
         ax.axvline(res["best_k"], color="red", ls=":")
-        ax.set_title(f"{col.replace('_', ' ').title()} ({better})")
+        ax.set_title(f"{col.replace('_', ' ').title()} ({sens})")
         ax.set_xlabel("k")
-    fig.suptitle(f"Choix du nombre de clusters K-Means — k retenu = {res['best_k']} "
-                 "(plus petit k à ≥ 95 % de la silhouette max)",
+    fig.suptitle(f"Clustering K-Means des CV (espace LSA) — k retenu = {res['best_k']} (silhouette max)",
                  fontweight="bold")
-    save(fig, "07_choix_k_clustering")
+    save(fig, "05_clustering_choix_k")
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    coords = PCA(n_components=2, random_state=C.RANDOM_STATE).fit_transform(res["Z"])
+    fig, axes = plt.subplots(1, 2, figsize=(17, 6.5), gridspec_kw={"width_ratios": [1.1, 1]})
+    sc = axes[0].scatter(coords[:, 0], coords[:, 1], c=res["labels"], cmap="tab10", s=14, alpha=0.75)
+    for k in range(res["best_k"]):
+        cx, cy = coords[res["labels"] == k].mean(axis=0)
+        axes[0].text(cx, cy, f"{k}: {', '.join(mots[k][:3])}", fontsize=8, weight="bold",
+                     bbox=dict(facecolor="white", alpha=0.8, lw=0))
+    axes[0].set_title("Familles de CV (projection ACP du plan LSA)")
+    axes[0].set_xlabel("Axe 1")
+    axes[0].set_ylabel("Axe 2")
     linked = linkage(res["Z"], method="ward")
-    dendrogram(linked, truncate_mode="lastp", p=30, ax=axes[0], color_threshold=None)
-    axes[0].set_title("Dendrogramme de la CAH (critère de Ward)")
-    axes[0].set_ylabel("Distance d'agrégation")
-    sc = axes[1].scatter(pca_coords[:, 0], pca_coords[:, 1], c=res["kmeans_labels"], cmap="tab10", s=10, alpha=0.6)
-    axes[1].legend(*sc.legend_elements(), title="Cluster", fontsize=8)
-    axes[1].set_title("Clusters K-Means projetés sur le plan factoriel de l'ACP")
-    axes[1].set_xlabel("PC1")
-    axes[1].set_ylabel("PC2")
-    save(fig, "08_clusters_cah_kmeans")
+    dendrogram(linked, truncate_mode="lastp", p=25, ax=axes[1])
+    axes[1].set_title(f"Dendrogramme CAH (Ward) — accord avec K-Means : ARI = {res['ari_cah']:.2f}")
+    save(fig, "06_familles_de_cv")
+
+    fig, ax = plt.subplots(figsize=(10, 0.45 * len(profil) + 1.5))
+    p = profil.iloc[::-1]
+    ax.barh([f"{k} — {', '.join(mots[k][:4])}" for k in p.index], p["taux_adapte"] * 100, color="#27ae60")
+    for i, (n, t) in enumerate(zip(p["n_cv"], p["taux_adapte"])):
+        ax.text(t * 100 + 0.5, i, f"{t:.0%} ({n} CV)", va="center", fontsize=8)
+    ax.set_title("Part des candidatures « adaptées » par famille de CV (Train)")
+    ax.set_xlabel("% de paires « Good Fit »")
+    save(fig, "07_profil_familles")
 
 
-# =========================================================================== 3. Anomalies
+# =========================================================================== 3. anomalies
 class GaussianAnomalyDetector:
     """
-    Détection d'anomalies par Distribution Gaussienne Multivariée (Cours 2, slides 82-85) :
-      1. standardiser ;  2. estimer μ = 1/n Σ xi  et  Σ = 1/n Σ (xi-μ)(xi-μ)ᵀ  sur le Train ;
-      3. calculer p(x) ;  4. anomalie si p(x) < ε  (ε = quantile bas des densités du Train).
-    On travaille en log-densité pour éviter les valeurs numériquement nulles.
+    Distribution gaussienne multivariée (Cours 2, slides 82-85) :
+    μ et Σ estimés sur le Train, p(x) calculé pour chaque dossier, anomalie si p(x) < ε.
+    ε = quantile bas (2 %) des densités du Train. On travaille en log-densité.
     """
 
-    def __init__(self, features=None, contamination: float = C.ANOMALY_CONTAMINATION):
-        self.features = list(features or ["Age"] + PROFILE_FEATURES)
+    def __init__(self, variables: list, contamination: float = C.ANOMALY_CONTAMINATION):
+        self.variables = variables
         self.contamination = contamination
 
     def fit(self, df: pd.DataFrame) -> "GaussianAnomalyDetector":
-        self.scaler_ = StandardScaler().fit(df[self.features])
-        Z = self.scaler_.transform(df[self.features])
-        self.mu_ = Z.mean(axis=0)
-        self.sigma_ = np.cov(Z, rowvar=False, bias=True)
-        self.dist_ = multivariate_normal(self.mu_, self.sigma_, allow_singular=True)
+        self.scaler_ = StandardScaler().fit(df[self.variables])
+        Z = self.scaler_.transform(df[self.variables])
+        self.dist_ = multivariate_normal(Z.mean(axis=0), np.cov(Z, rowvar=False, bias=True), allow_singular=True)
         self.log_epsilon_ = float(np.quantile(self.dist_.logpdf(Z), self.contamination))
         return self
 
     def log_density(self, df: pd.DataFrame) -> np.ndarray:
-        return np.atleast_1d(self.dist_.logpdf(self.scaler_.transform(df[self.features])))
+        return np.atleast_1d(self.dist_.logpdf(self.scaler_.transform(df[self.variables])))
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
-        """True = anomalie."""
         return self.log_density(df) < self.log_epsilon_
 
     def zscores(self, df: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame(self.scaler_.transform(df[self.features]), columns=self.features, index=df.index)
-
-
-def plot_anomalies(det: GaussianAnomalyDetector, train: pd.DataFrame, test: pd.DataFrame) -> None:
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(det.log_density(train), bins=50, alpha=0.6, label="Train", density=True)
-    ax.hist(det.log_density(test), bins=50, alpha=0.6, label="Test", density=True)
-    ax.axvline(det.log_epsilon_, color="red", ls="--", label=f"Seuil log ε = {det.log_epsilon_:.1f}")
-    ax.set_title("Log-densité gaussienne multivariée des candidats")
-    ax.set_xlabel("log p(x)")
-    ax.legend()
-    save(fig, "09_anomalies_gaussiennes")
+        return pd.DataFrame(self.scaler_.transform(df[self.variables]), columns=self.variables, index=df.index)

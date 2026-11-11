@@ -1,43 +1,19 @@
 """
-Prétraitement sous forme de Pipeline scikit-learn / imbalanced-learn.
+Pipeline de prétraitement : standardisation -> SMOTE (entraînement seulement) -> modèle.
 
-Pourquoi un Pipeline ? Parce que chaque étape (standardisation, SMOTE) est alors apprise
-UNIQUEMENT sur les données d'entraînement de chaque pli de validation croisée :
-c'est la garantie technique qu'il n'y a pas de fuite de données.
-
-    Pipeline = [ prétraitement ]  ->  [ SMOTE (train seulement) ]  ->  [ modèle ]
+Le Pipeline garantit qu'en validation croisée, la standardisation et SMOTE sont appris
+uniquement sur les plis d'entraînement : aucune fuite de données (Cours 1, slides 57-59 et 84-86).
 """
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
 from . import config as C
 
 
-def build_preprocessor(features) -> ColumnTransformer:
-    """
-    - Variables numériques et ordinales : centrage-réduction (z = (x - μ) / σ).
-    - Variable catégorielle (stratégie 1/2/3) : codage one-hot.
-    - Variable binaire : laissée telle quelle.
-    """
-    num = [f for f in C.NUMERIC_FEATURES + C.ORDINAL_FEATURES if f in features]
-    cat = [f for f in C.CATEGORICAL_FEATURES if f in features]
-    binary = [f for f in C.BINARY_FEATURES if f in features]
-    transformers = [("num", StandardScaler(), num)]
-    if cat:
-        transformers.append(("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat))
-    if binary:
-        transformers.append(("bin", "passthrough", binary))
-    return ColumnTransformer(transformers, verbose_feature_names_out=False)
-
-
-def build_pipeline(model, features, use_smote: bool = True) -> Pipeline:
-    """Pipeline complet : prétraitement -> (SMOTE) -> modèle."""
-    steps = [("prep", build_preprocessor(features))]
+def build_pipeline(model, use_smote: bool = True) -> Pipeline:
+    steps = [("scaler", StandardScaler())]
     if use_smote:
-        # SMOTE (Cours 1, slides 57-59) : appliqué au moment du fit uniquement,
-        # jamais lors de la prédiction sur validation / test.
         steps.append(("smote", SMOTE(random_state=C.RANDOM_STATE)))
     steps.append(("model", model))
     return Pipeline(steps)

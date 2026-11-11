@@ -1,9 +1,129 @@
 {
-  "acp_axes_kaiser": 4,
-  "acp_variance_2_axes_%": 31.08,
-  "clustering_k": 2,
-  "clustering_silhouette": 0.1118,
-  "anomalies_log_epsilon": -14.566,
-  "anomalies_train": 21,
-  "anomalies_test": 2
+  "embeddings": true,
+  "lsa_variance_totale": 0.2836,
+  "clustering_k": 12,
+  "silhouette": 0.0934,
+  "ari_kmeans_cah": 0.6477,
+  "familles": {
+    "0": [
+      "test",
+      "testing",
+      "test cases",
+      "cases",
+      "qa",
+      "regression",
+      "defects",
+      "sql"
+    ],
+    "1": [
+      "java",
+      "web",
+      "sql",
+      "script",
+      "java script",
+      "software",
+      "server",
+      "development"
+    ],
+    "2": [
+      "electrical",
+      "engineering",
+      "equipment",
+      "project",
+      "design",
+      "engineer",
+      "electrical engineering",
+      "construction"
+    ],
+    "3": [
+      "data entry",
+      "data",
+      "entry",
+      "customer",
+      "office",
+      "administrative",
+      "customer service",
+      "service"
+    ],
+    "4": [
+      "design",
+      "electrical",
+      "engineering",
+      "engineer",
+      "embedded",
+      "electronics",
+      "test",
+      "circuit"
+    ],
+    "5": [
+      "electrical",
+      "equipment",
+      "wiring",
+      "repair",
+      "safety",
+      "electrical systems",
+      "parts",
+      "components"
+    ],
+    "6": [
+      "sql server",
+      "sql",
+      "ssis",
+      "server",
+      "ssrs",
+      "etl",
+      "database",
+      "tables"
+    ],
+    "7": [
+      "accounting",
+      "accounts",
+      "financial",
+      "tax",
+      "ledger",
+      "accountant",
+      "general ledger",
+      "monthly"
+    ],
+    "8": [
+      "network",
+      "hardware",
+      "cisco",
+      "windows",
+      "servers",
+      "ip",
+      "software",
+      "support"
+    ],
+    "9": [
+      "sales",
+      "data",
+      "management",
+      "service",
+      "microsoft",
+      "customer",
+      "reports",
+      "gpa"
+    ],
+    "10": [
+      "sql",
+      "data",
+      "spark",
+      "etl",
+      "hive",
+      "python",
+      "using",
+      "hadoop"
+    ],
+    "11": [
+      "data",
+      "business",
+      "analyst",
+      "sql",
+      "management",
+      "analysis",
+      "project",
+      "quality"
+    ]
+  }
 }

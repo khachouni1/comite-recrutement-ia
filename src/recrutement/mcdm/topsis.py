@@ -6,24 +6,30 @@ TOPSIS — Technique for Order Preference by Similarity to Ideal Solution.
     3. Solution idéale A+ = max_i v_ij ;   solution anti-idéale A− = min_i v_ij  (critères à maximiser)
     4. Distances euclidiennes :            D_i+ = ||v_i − A+||,   D_i− = ||v_i − A−||
     5. Coefficient de proximité :          C_i = D_i− / (D_i+ + D_i−)  ∈ [0, 1]   (1 = idéal)
-Tous nos critères sont des critères « bénéfice » (plus la note est haute, mieux c'est).
+
+Deux usages :
+  - classique (reference=None) : normalisation et idéaux calculés sur les candidats classés entre eux
+    -> utile pour classer plusieurs CV pour UNE offre ;
+  - à référence fixe (reference = notes du Train) : normalisation et idéaux figés une fois pour toutes
+    -> le score d'un candidat seul est absolu et comparable d'une offre à l'autre (site web).
 """
 import numpy as np
 import pandas as pd
 
 
-def topsis(scores: pd.DataFrame, weights: dict) -> pd.DataFrame:
+def topsis(scores: pd.DataFrame, weights: dict, reference: pd.DataFrame | None = None) -> pd.DataFrame:
     crit = list(weights)
     x = scores[crit].to_numpy(dtype=float)
+    ref = x if reference is None else reference[crit].to_numpy(dtype=float)
     w = np.array([weights[c] for c in crit])
-    norm = np.sqrt((x ** 2).sum(axis=0))
-    v = x / np.where(norm == 0, 1, norm) * w
-    ideal, anti = v.max(axis=0), v.min(axis=0)
+    norm = np.sqrt((ref ** 2).sum(axis=0))
+    norm = np.where(norm == 0, 1, norm)
+    v, v_ref = x / norm * w, ref / norm * w
+    ideal, anti = v_ref.max(axis=0), v_ref.min(axis=0)
     d_plus = np.sqrt(((v - ideal) ** 2).sum(axis=1))
     d_minus = np.sqrt(((v - anti) ** 2).sum(axis=1))
     out = pd.DataFrame(index=scores.index)
-    out["D_plus"] = d_plus
-    out["D_moins"] = d_minus
+    out["D_plus"], out["D_moins"] = d_plus, d_minus
     out["TOPSIS_score"] = d_minus / np.where(d_plus + d_minus == 0, 1, d_plus + d_minus)
     out["TOPSIS_rang"] = out["TOPSIS_score"].rank(ascending=False, method="min").astype(int)
     return out

@@ -1,11 +1,13 @@
 """
-Démonstration interactive du comité multi-agents (Streamlit).
+Site web du comité de recrutement multi-agents.
 
     streamlit run app/app.py          (après  python scripts/run_all.py)
 
-Onglets : 1. Décision du comité   2. Fiche candidat   3. Nouveau candidat   4. Résultats ML & XAI
-La barre latérale permet de saisir ses propres jugements AHP : le classement est recalculé en direct.
+1. Évaluer un candidat      : une offre + un CV  ->  décision argumentée critère par critère
+2. Classer des candidats    : une offre + plusieurs CV  ->  classement TOPSIS
+3. Comment ça marche        : méthode, résultats, figures
 """
+import json
 import sys
 from pathlib import Path
 
@@ -13,154 +15,185 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import joblib
-import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
-from sklearn.metrics import roc_auc_score
 
 from recrutement import config as C
 from recrutement.agents import EXAMINER, NON_RETENU, RECOMMANDE, VETO
+from recrutement.lexiques import DEGREE_NAMES
 from recrutement.mcdm import AHP
+from recrutement.texte import lire_fichier
 
-st.set_page_config(page_title="Comité de recrutement multi-agents", page_icon="👔", layout="wide")
-ICONES = {RECOMMANDE: "✅", EXAMINER: "🟠", VETO: "⛔", NON_RETENU: "❌"}
+st.set_page_config(page_title="Comité de recrutement IA", page_icon="👔", layout="wide")
 LAB = C.CRITERIA_LABELS
-DELIB_COLS = C.CRITERIA + [f"{p}_{c.replace('score_', '')}" for c in C.CRITERIA for p in ("confiance", "avis")] + \
-    ["anomalie", "avis_anomalie", "ecart_avis", "desaccord", "veto", "contrefactuel_ok", "ecart_contrefactuel",
-     "agents_sensibles"]
+STYLE = {RECOMMANDE: ("✅", "#27ae60"), EXAMINER: ("🟠", "#f39c12"), NON_RETENU: ("❌", "#7f8c8d"),
+         VETO: ("⛔", "#c0392b")}
+ICONES = {"score_technique": "🛠️", "score_experience": "📈", "score_formation": "🎓",
+          "score_soft_skills": "🤝", "score_adequation": "🎯", "score_predictif": "🤖"}
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Chargement du comité d'agents…")
 def charger_comite():
     return joblib.load(C.MODELS_DIR / "comite.joblib")
 
 
 @st.cache_data
-def charger_classement():
-    df = pd.read_csv(C.DATA_PROCESSED / "classement_test.csv", index_col="id")
-    df[["veto", "agents_sensibles"]] = df[["veto", "agents_sensibles"]].fillna("")
-    return df
+def exemples() -> pd.DataFrame:
+    return pd.read_csv(C.RAW_DIR / "test.csv")
 
 
 if not (C.MODELS_DIR / "comite.joblib").exists():
-    st.error("Comité non entraîné : exécutez d'abord  `python scripts/run_all.py`")
+    st.error("Le comité n'est pas encore entraîné : exécutez  `python scripts/run_all.py`.")
     st.stop()
-comite, base = charger_comite(), charger_classement()
+comite = charger_comite()
 
-# ------------------------------------------------------------------ barre latérale : jugements AHP
-st.sidebar.header("⚖️ Jugements AHP")
-st.sidebar.caption("« Le critère de gauche est x fois plus important que celui de droite » (échelle de Saaty). "
-                   "Poids = vecteur propre principal ; jugements acceptés si CR < 0.10.")
-echelle = [1 / v for v in range(9, 1, -1)] + list(range(1, 10))
-fmt = lambda v: f"1/{round(1 / v)}" if v < 1 else str(int(v))
-defaut = np.array(C.AHP_MATRIX, dtype=float)
-jugements = {}
-for i, ci in enumerate(C.CRITERIA):
-    for j, cj in enumerate(C.CRITERIA):
-        if j > i:
-            proche = min(echelle, key=lambda v: abs(np.log(v) - np.log(defaut[i, j])))
-            jugements[(ci, cj)] = st.sidebar.select_slider(f"{LAB[ci]} vs {LAB[cj]}", echelle, proche, fmt)
-ahp = AHP.from_judgments(C.CRITERIA, jugements)
-if ahp.is_consistent:
-    poids = ahp.weights
-    st.sidebar.success(f"CR = {ahp.cr:.3f} < 0.10 : jugements cohérents")
+# ---------------------------------------------------------------- barre latérale : priorités
+st.sidebar.header("⚖️ Priorités du recruteur")
+mode = st.sidebar.radio("Pondération des critères", ["Comité (AHP expert)", "Mes priorités"], index=0)
+if mode == "Mes priorités":
+    st.sidebar.caption("Importance de 1 (faible) à 9 (essentielle). Une matrice AHP cohérente est construite "
+                       "avec a_ij = importance_i / importance_j.")
+    prio = {c: st.sidebar.slider(LAB[c], 1, 9, 5) for c in C.CRITERIA}
+    poids = AHP(C.CRITERIA, [[prio[i] / prio[j] for j in C.CRITERIA] for i in C.CRITERIA]).weights
 else:
     poids = comite.poids
-    st.sidebar.error(f"CR = {ahp.cr:.3f} ≥ 0.10 : jugements incohérents, poids par défaut conservés.")
+    st.sidebar.caption(f"Matrice de comparaison par paires du comité : CR = {comite.ahp.cr:.3f} < 0.10.")
 for c in C.CRITERIA:
-    st.sidebar.progress(float(poids[c]), text=f"{LAB[c]} : {poids[c]:.1%}")
-places = st.sidebar.slider("Nombre de places (short-list)", 10, 120, comite.nb_places(len(base)))
+    st.sidebar.progress(float(poids[c]), text=f"{ICONES[c]} {LAB[c]} : {poids[c]:.0%}")
+st.sidebar.divider()
+st.sidebar.caption("⚠️ Le comité a été entraîné sur des CV et des offres **en anglais**. "
+                   "Outil d'aide à la décision : la décision finale revient à un humain.")
 
-# ------------------------------------------------------------------ décision recalculée en direct
-dec = comite.decider(base[DELIB_COLS], poids, places).join(base[C.ALL_FEATURES + [C.TARGET]])
-audit = comite.ethique.audit_selection(dec)
-y = dec[C.TARGET]
+st.title("👔 Comité de recrutement multi-agents")
+st.caption("Six agents évaluent un CV face à une offre, un coordinateur agrège leurs avis (AHP + TOPSIS), "
+           "deux agents de contrôle vérifient la qualité du dossier et l'équité.")
+onglets = st.tabs(["🔎 Évaluer un candidat", "🏆 Classer plusieurs candidats", "📚 Comment ça marche"])
 
-st.title("👔 Comité multi-agents d'aide à la sélection de candidats")
-st.caption("Sujet 11 — ECC, Ingénierie Machine Learning & Statistique. Données : 225 candidats du jeu de test.")
-m = st.columns(4)
-m[0].metric("Sélectionnés", int(dec["selectionne"].sum()), f"dont {int((dec['decision'] == EXAMINER).sum())} à examiner")
-m[1].metric("Embauchés réels dans la sélection", f"{y[dec['selectionne']].mean():.0%}", f"hasard : {y.mean():.0%}")
-m[2].metric("AUC du classement TOPSIS", f"{roc_auc_score(y, dec['TOPSIS_score']):.3f}",
-            f"WSM : {roc_auc_score(y, dec['WSM_score']):.3f}")
-m[3].metric("Audit éthique", "Conforme" if audit["conforme"] else f"{len(audit['alertes'])} alerte(s)",
-            f"DI genre = {audit['disparate_impact']['Genre']['DI']:.2f}")
 
-onglets = st.tabs(["🏆 Décision du comité", "🤖 Fiche candidat", "🧪 Nouveau candidat", "📊 Résultats ML & XAI"])
+def zone_texte(titre: str, cle: str, hauteur: int = 260) -> str:
+    fichier = st.file_uploader(f"{titre} — déposer un fichier (PDF, Word, TXT)", type=["pdf", "docx", "txt"],
+                               key=f"f_{cle}")
+    if fichier is not None:
+        st.session_state[cle] = lire_fichier(fichier.name, fichier.getvalue())
+    return st.text_area(f"{titre} — ou coller le texte", key=cle, height=hauteur)
 
-# ------------------------------------------------------------------ 1. décision
+
+def radar(notes: dict) -> go.Figure:
+    noms = [LAB[c] for c in C.CRITERIA]
+    vals = [notes[c] for c in C.CRITERIA]
+    fig = go.Figure(go.Scatterpolar(r=vals + vals[:1], theta=noms + noms[:1], fill="toself", name="Candidat"))
+    fig.update_layout(polar=dict(radialaxis=dict(range=[0, 100])), showlegend=False, height=360,
+                      margin=dict(l=40, r=40, t=30, b=30))
+    return fig
+
+
+# ================================================================= 1. évaluer un candidat
 with onglets[0]:
-    filtre = st.multiselect("Décisions affichées", list(ICONES), default=list(ICONES))
-    vue = dec[dec["decision"].isin(filtre)]
-    colonnes = ["decision", "TOPSIS_rang", "TOPSIS_score", "WSM_rang"] + C.CRITERIA + ["ecart_avis", "justification", C.TARGET]
-    st.dataframe(vue[colonnes].rename(columns={**LAB, C.TARGET: "Embauché (réel)"}), height=420, width="stretch")
-    st.download_button("📥 Télécharger (CSV)", dec.to_csv().encode("utf-8"), "decision_comite.csv", "text/csv")
-    st.subheader("⚖️ Audit éthique de la sélection")
-    a = st.columns(2)
-    for col, (g, info) in zip(a, audit["disparate_impact"].items()):
-        col.markdown(f"**{g}** — Disparate Impact = `{info['DI']:.2f}` "
-                     f"{'✅ règle des 4/5 respectée' if info['conforme'] else '⚠️ règle des 4/5 non respectée'}")
-        col.bar_chart(pd.Series(info["taux_selection"], name="Taux de sélection"))
-    for alerte in audit["alertes"]:
-        st.warning(alerte)
-
-# ------------------------------------------------------------------ 2. fiche candidat
-with onglets[1]:
-    cid = st.selectbox("Candidat (id)", dec.index.tolist())
-    r = dec.loc[cid]
-    st.markdown(f"### {ICONES[r['decision']]} {r['decision']} — rang TOPSIS {int(r['TOPSIS_rang'])}")
-    st.caption(r["justification"])
-    g, d = st.columns([1, 1.4])
+    ex = exemples()
+    with st.expander("Charger un exemple réel du jeu de test"):
+        etiquette = st.selectbox("Exemple dont l'étiquette réelle est", C.LABELS,
+                                 format_func=lambda l: C.LABELS_FR[l])
+        if st.button("Charger cet exemple"):
+            r = ex[ex["label"] == etiquette].sample(1).iloc[0]
+            st.session_state["offre"], st.session_state["cv"] = r["job_description_text"], r["resume_text"]
+            st.session_state["etiquette_exemple"] = etiquette
+    g, d = st.columns(2)
     with g:
-        st.bar_chart(pd.Series({LAB[c]: r[c] for c in C.CRITERIA}, name="Note /100"), horizontal=True)
-        st.write(f"Écart d'avis entre agents : **{r['ecart_avis']:.2f}** {'⚠️ désaccord' if r['desaccord'] else ''}")
-        st.write(f"Décision réelle : **{'embauché' if r[C.TARGET] == 1 else 'non retenu'}**")
-        st.dataframe(r[C.ALL_FEATURES].rename(C.LABELS).to_frame("valeur"), width="stretch")
+        offre = zone_texte("📄 Offre d'emploi", "offre")
     with d:
-        for c in C.CRITERIA:
-            court = c.replace("score_", "")
-            st.info(f"**{LAB[c]}** (confiance {r[f'confiance_{court}']:.2f}) — {r[f'avis_{court}']}")
-        st.write(f"🔎 {r['avis_anomalie']}")
-        st.write("⚖️ " + ("Test contrefactuel réussi : genre et âge ne changent aucune note."
-                          if r["contrefactuel_ok"] else f"Alerte contrefactuelle : {r['agents_sensibles']}"))
-        if r["veto"]:
-            st.error(f"⛔ Véto : {r['veto']}")
+        cv = zone_texte("👤 CV du candidat", "cv")
 
-# ------------------------------------------------------------------ 3. nouveau candidat
-with onglets[2]:
-    with st.form("nouveau"):
-        c1, c2, c3 = st.columns(3)
-        cand = {
-            "SkillScore": c1.slider("Test technique", 0, 100, 80),
-            "InterviewScore": c1.slider("Entretien", 0, 100, 70),
-            "PersonalityScore": c1.slider("Personnalité", 0, 100, 70),
-            "EducationLevel": c2.selectbox("Niveau d'études (1 à 4)", [1, 2, 3, 4], index=2),
-            "ExperienceYears": c2.slider("Années d'expérience", 0, 15, 6),
-            "PreviousCompanies": c2.slider("Entreprises précédentes", 1, 5, 2),
-            "RecruitmentStrategy": c3.selectbox("Stratégie de recrutement (1 à 3)", [1, 2, 3], index=1),
-            "DistanceFromCompany": c3.slider("Distance (km)", 1.0, 51.0, 15.0),
-            "Age": c3.slider("Âge (sert uniquement à l'audit)", 20, 50, 30),
-            "Gender": c3.selectbox("Genre (sert uniquement à l'audit)", [0, 1],
-                                   format_func=lambda v: "Femme" if v == 0 else "Homme"),
-        }
-        go = st.form_submit_button("🚀 Faire délibérer le comité")
-    if go:
-        res = comite.evaluer_candidat(cand, base, poids)
-        st.markdown(f"## {ICONES[res['decision']]} {res['decision']}")
-        st.caption(f"Rang TOPSIS {res['rang']} / {res['taille_vivier']} (short-list de {res['nb_places']} places) — "
-                   f"écart d'avis {res['ecart_avis']:.2f}")
-        cols = st.columns(4)
-        for col, c in zip(cols, C.CRITERIA):
-            col.metric(LAB[c], f"{res['avis'][c].note:.0f}/100", f"percentile {res['percentiles'][c]:.0%}")
-        for c in C.CRITERIA:
-            st.write(f"**{LAB[c]}** (confiance {res['avis'][c].confiance:.2f}) — {res['avis'][c].texte}")
+    if st.button("🚀 Lancer l'évaluation du comité", type="primary", disabled=not (offre.strip() and cv.strip())):
+        with st.spinner("Les agents délibèrent…"):
+            res = comite.evaluer(cv, offre, poids)
+        icone, couleur = STYLE[res["decision"]]
+        st.markdown(f"<div style='padding:16px;border-radius:10px;background:{couleur}22;border-left:6px solid {couleur}'>"
+                    f"<h2 style='margin:0'>{icone} {res['decision']}</h2>"
+                    f"<p style='margin:4px 0 0 0'>{res['justification']}</p></div>", unsafe_allow_html=True)
+        if st.session_state.get("etiquette_exemple"):
+            st.caption(f"Étiquette réelle de cet exemple : **{C.LABELS_FR[st.session_state['etiquette_exemple']]}**")
+
+        m = st.columns(4)
+        m[0].metric("Score global (TOPSIS)", f"{res['score_global']:.0f}/100")
+        m[1].metric("Baseline (somme pondérée)", f"{res['score_wsm']:.0f}/100")
+        m[2].metric("Avis prédictif (ML)", f"{res['predictif'].note:.0f}/100")
+        m[3].metric("Seuil de recommandation", f"{comite.seuil_reco:.0f}/100")
+
+        col_radar, col_avis = st.columns([1, 1.5])
+        with col_radar:
+            st.plotly_chart(radar({c: a.note for c, a in res["avis"].items()}), width="stretch")
+            det = res["details"]
+            exige = "—" if det["annees_exigees"] is None else f"{det['annees_exigees']:.0f}"
+            st.markdown(f"**Extrait du texte** — expérience : {det['annees_cv']:.0f} an(s) (exigé : {exige}) · "
+                        f"diplôme : {DEGREE_NAMES[det['diplome_cv']]} (exigé : {DEGREE_NAMES[det['diplome_exige']]})")
+        with col_avis:
+            for c, a in res["avis"].items():
+                with st.container(border=True):
+                    st.markdown(f"**{ICONES[c]} {a.agent} — {a.note:.0f}/100** · confiance {a.confiance:.0%}")
+                    st.write(a.texte)
+                    if c in ("score_technique", "score_soft_skills"):
+                        if a.points_forts:
+                            st.markdown("✅ " + " · ".join(f"`{s}`" for s in a.points_forts))
+                        if a.points_faibles:
+                            st.markdown("❌ " + " · ".join(f"`{s}`" for s in a.points_faibles))
+        st.markdown("#### Agents de contrôle")
+        k2, k3 = st.columns(2)
+        (k2.warning if res["anomalie"].details["anomalie"] else k2.success)(f"🔎 **{res['anomalie'].agent}** — "
+                                                                             f"{res['anomalie'].texte}")
+        cf = res["ethique"].details.get("contrefactuel") or {"ok": True}
+        (k3.success if cf["ok"] else k3.error)(f"⚖️ **{res['ethique'].agent}** — {res['ethique'].texte}")
         if res["veto"]:
-            st.error("⛔ Véto : " + ", ".join(res["veto"]))
-        (st.warning if res["anomalie"].details["anomalie"] else st.write)(f"🔎 {res['anomalie'].texte}")
-        st.write(f"⚖️ {res['ethique'].texte}")
+            st.error(f"⛔ Critère éliminatoire non atteint : {res['veto']}")
 
-# ------------------------------------------------------------------ 4. figures
-with onglets[3]:
+# ================================================================= 2. classer plusieurs candidats
+with onglets[1]:
+    st.markdown("Une offre, plusieurs CV : le comité note chaque candidat, TOPSIS les classe entre eux.")
+    ex = exemples()
+    if st.button("Charger une offre réelle et ses candidats (jeu de test)"):
+        offre_ex = ex["job_description_text"].value_counts().index[0]
+        sous = ex[ex["job_description_text"] == offre_ex].head(12)
+        st.session_state["offre_multi"] = offre_ex
+        st.session_state["cvs_multi"] = {f"Candidat {i + 1}": t for i, t in enumerate(sous["resume_text"])}
+        st.session_state["verite_multi"] = {f"Candidat {i + 1}": C.LABELS_FR[l] for i, l in enumerate(sous["label"])}
+    offre_m = zone_texte("📄 Offre d'emploi", "offre_multi", 200)
+    fichiers = st.file_uploader("👥 Déposer plusieurs CV (PDF, Word, TXT)", type=["pdf", "docx", "txt"],
+                                accept_multiple_files=True, key="cvs_files")
+    cvs = dict(st.session_state.get("cvs_multi", {}))
+    for f in fichiers or []:
+        cvs[f.name] = lire_fichier(f.name, f.getvalue())
+    st.caption(f"{len(cvs)} CV prêt(s).")
+    if st.button("🏆 Classer les candidats", type="primary", disabled=not (offre_m.strip() and len(cvs) >= 2)):
+        with st.spinner("Évaluation de chaque candidat…"):
+            classement = comite.classer(cvs, offre_m, poids)
+        vue = classement[["rang", "decision", "score_global"] + C.CRITERIA].rename(
+            columns={**LAB, "score_global": "Score global", "decision": "Décision", "rang": "Rang"})
+        if "verite_multi" in st.session_state:
+            vue["Étiquette réelle"] = vue.index.map(st.session_state["verite_multi"])
+        st.dataframe(vue.style.format(precision=0).background_gradient(subset=[LAB[c] for c in C.CRITERIA],
+                                                                       cmap="Greens", vmin=0, vmax=100),
+                     width="stretch")
+        st.bar_chart(classement["score_global"].rename("Score global"))
+
+# ================================================================= 3. comment ça marche
+with onglets[2]:
+    st.markdown("""
+**Démarche** (code dans `src/recrutement`, une étape par script dans `scripts/`) :
+1. **Données** : 8 000 paires CV / offre étiquetées *adapté, potentiel, non adapté* (Hugging Face).
+   Découpage Train / Validation / Test **par offre** : le Test ne contient que des postes jamais vus.
+2. **Texte** : nettoyage, **anonymisation**, extraction de critères (compétences, années, diplômes, soft skills),
+   représentations TF-IDF → LSA (ACP du texte) → embeddings Hugging Face ; clustering des CV en familles de métiers.
+3. **Apprentissage supervisé** : régression softmax (baseline) vs arbres, forêts, gradient boosting, XGBoost ;
+   SMOTE, validation croisée groupée, SHAP, permutation, analyse des erreurs.
+4. **Comité** : 6 agents appris sur les données, poids **AHP** (CR < 0.10), score **TOPSIS** comparé à la baseline
+   **WSM**, véto, second avis ML, contrôle des anomalies, audit éthique.
+""")
+    synth = C.RESULTS_DIR / "04_synthese.json"
+    if synth.exists():
+        ev = pd.DataFrame(json.loads(synth.read_text(encoding="utf-8"))["evaluation"]).T
+        st.markdown("**Résultats sur le Test**")
+        st.dataframe(ev.style.format("{:.3f}"), width="stretch")
     figures = sorted(C.FIGURES_DIR.glob("*.png"))
-    choix = st.selectbox("Figure", [f.stem for f in figures])
-    st.image(str(C.FIGURES_DIR / f"{choix}.png"), width="stretch")
+    if figures:
+        choix = st.selectbox("Figure", [f.stem for f in figures])
+        st.image(str(C.FIGURES_DIR / f"{choix}.png"), width="stretch")

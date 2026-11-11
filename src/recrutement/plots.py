@@ -8,13 +8,12 @@ import seaborn as sns
 from . import config as C
 
 sns.set_theme(style="whitegrid", palette="muted")
-plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 160, "font.size": 10,
+plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 150, "font.size": 10,
                      "axes.titleweight": "bold", "axes.titlesize": 11})
 
-COLOR_HIRED = "#2e86de"
-COLOR_REJECTED = "#c0392b"
-DECISION_COLORS = {"Recommandé": "#27ae60", "À examiner": "#f39c12",
-                   "Non retenu": "#95a5a6", "Écarté (véto)": "#c0392b"}
+PALETTE_LABELS = {"No Fit": "#c0392b", "Potential Fit": "#f39c12", "Good Fit": "#27ae60"}
+DECISION_COLORS = {"Recommandé": "#27ae60", "À examiner": "#f39c12", "Non retenu": "#95a5a6",
+                   "Écarté (véto)": "#c0392b"}
 
 
 def save(fig, name: str) -> None:

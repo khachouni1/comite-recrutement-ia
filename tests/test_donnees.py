@@ -1,34 +1,28 @@
-"""Tests du découpage Train / Val / Test : tailles, stratification et absence de fuite."""
+"""Tests du découpage : aucune offre partagée entre Train, Validation et Test (pas de fuite)."""
 import pytest
 
-from recrutement import config as C
 from recrutement import data
 
 
 @pytest.fixture(scope="module")
-def decoupage():
-    return data.split_three_way(data.load_raw())
+def jeux():
+    tr, te = data.charger_brut()
+    return data.decouper(data.preparer(tr), data.preparer(te))
 
 
-def test_proportions_70_15_15(decoupage):
-    train, val, test = decoupage
-    n = len(train) + len(val) + len(test)
-    assert n == 1500
-    assert len(test) / n == pytest.approx(0.15, abs=0.01)
-    assert len(val) / n == pytest.approx(0.15, abs=0.01)
+def test_aucune_offre_partagee(jeux):
+    train, val, test = jeux
+    assert not set(train["offre_id"]) & set(val["offre_id"])
+    assert not set(train["offre_id"]) & set(test["offre_id"])
+    assert not set(val["offre_id"]) & set(test["offre_id"])
 
 
-def test_aucun_candidat_partage(decoupage):
-    train, val, test = decoupage
-    assert not set(train.index) & set(val.index)
-    assert not set(train.index) & set(test.index)
-    assert not set(val.index) & set(test.index)
+def test_tailles_et_etiquettes(jeux):
+    train, val, test = jeux
+    assert len(train) + len(val) == 6240 and len(test) == 1759
+    for part in jeux:
+        assert set(part["y"]) == {0, 1, 2}
 
 
-def test_stratification(decoupage):
-    taux = [part[C.TARGET].mean() for part in decoupage]
-    assert max(taux) - min(taux) < 0.01
-
-
-def test_attributs_proteges_exclus_des_modeles():
-    assert not set(C.PROTECTED) & set(C.MODEL_FEATURES)
+def test_textes_anonymises(jeux):
+    assert not jeux[0]["cv"].str.contains(r"\S+@\S+\.\S+", regex=True).any()

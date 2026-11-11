@@ -1,57 +1,87 @@
 {
   "ahp": {
     "poids": {
-      "score_technique": 0.4554,
-      "score_experience": 0.2628,
-      "score_rh": 0.1409,
-      "score_predictif": 0.1409
+      "score_technique": 0.2423,
+      "score_experience": 0.1369,
+      "score_formation": 0.0534,
+      "score_soft_skills": 0.0829,
+      "score_adequation": 0.2423,
+      "score_predictif": 0.2423
     },
-    "lambda_max": 4.0104,
-    "CI": 0.0035,
-    "CR": 0.0038,
+    "lambda_max": 6.0368,
+    "CI": 0.0074,
+    "CR": 0.0059,
     "coherent": true
   },
-  "nb_places": 70,
-  "decisions": {
-    "Non retenu": 126,
-    "Recommandé": 60,
-    "Écarté (véto)": 29,
-    "À examiner": 10
+  "calibrage": {
+    "seuil_recommande": 44.22972231610339,
+    "seuil_non_retenu": 39.3862194185071,
+    "part_recommandes": 0.369727047146402,
+    "precision_recommandes": 0.7013422818791947,
+    "part_non_retenus": 0.49007444168734493,
+    "precision_non_retenus": 0.6506329113924051
   },
-  "precision_selection": 0.6,
-  "auc_topsis": 0.7791,
-  "auc_wsm": 0.8147,
-  "audit_ethique": {
-    "disparate_impact": {
-      "Genre": {
-        "taux_selection": {
-          "Femme": 0.308,
-          "Homme": 0.314
-        },
-        "DI": 0.984,
-        "conforme": true
-      },
-      "Tranche_age": {
-        "taux_selection": {
-          "30-39": 0.329,
-          "< 30": 0.28,
-          "≥ 40": 0.324
-        },
-        "DI": 0.851,
-        "conforme": true
-      }
+  "seuils_veto": {
+    "score_technique": 33.427532023880914,
+    "score_adequation": 35.082596295307525
+  },
+  "contrefactuel_ecart_max": 0.0,
+  "evaluation": {
+    "TOPSIS (comité)": {
+      "AUC adéquat vs non": 0.6922,
+      "AUC adapté vs reste": 0.6647,
+      "Spearman": 0.3369,
+      "NDCG@5 par offre": 0.668,
+      "Précision top-3 par offre": 0.2802
     },
-    "proxies": {
-      "score_technique ~ Gender": 0.004,
-      "score_technique ~ Age": 0.015,
-      "score_experience ~ Gender": 0.03,
-      "score_experience ~ Age": 0.021,
-      "score_rh ~ Gender": -0.056,
-      "score_rh ~ Age": -0.004,
-      "score_predictif ~ Gender": 0.078,
-      "score_predictif ~ Age": 0.05
+    "WSM (baseline)": {
+      "AUC adéquat vs non": 0.6804,
+      "AUC adapté vs reste": 0.6486,
+      "Spearman": 0.3124,
+      "NDCG@5 par offre": 0.6434,
+      "Précision top-3 par offre": 0.2657
     },
-    "alertes": [],
-    "conforme": true
+    "Compétences techniques seul": {
+      "AUC adéquat vs non": 0.5946,
+      "AUC adapté vs reste": 0.5387,
+      "Spearman": 0.1386,
+      "NDCG@5 par offre": 0.5809,
+      "Précision top-3 par offre": 0.2174
+    },
+    "Expérience seul": {
+      "AUC adéquat vs non": 0.5258,
+      "AUC adapté vs reste": 0.4869,
+      "Spearman": 0.0226,
+      "NDCG@5 par offre": 0.4984,
+      "Précision top-3 par offre": 0.0966
+    },
+    "Formation seul": {
+      "AUC adéquat vs non": 0.5231,
+      "AUC adapté vs reste": 0.54,
+      "Spearman": 0.054,
+      "NDCG@5 par offre": 0.4694,
+      "Précision top-3 par offre": 0.1304
+    },
+    "Soft skills seul": {
+      "AUC adéquat vs non": 0.5289,
+      "AUC adapté vs reste": 0.5458,
+      "Spearman": 0.0642,
+      "NDCG@5 par offre": 0.4828,
+      "Précision top-3 par offre": 0.1932
+    },
+    "Adéquation au poste seul": {
+      "AUC adéquat vs non": 0.6189,
+      "AUC adapté vs reste": 0.5957,
+      "Spearman": 0.2044,
+      "NDCG@5 par offre": 0.5976,
+      "Précision top-3 par offre": 0.2415
+    },
+    "Avis prédictif (ML) seul": {
+      "AUC adéquat vs non": 0.7269,
+      "AUC adapté vs reste": 0.7119,
+      "Spearman": 0.4089,
+      "NDCG@5 par offre": 0.6436,
+      "Précision top-3 par offre": 0.2754
+    }
   }
 }

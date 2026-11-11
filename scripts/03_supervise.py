@@ -1,9 +1,13 @@
 """
-ÉTAPE 3 — Apprentissage supervisé, sélection de modèle et interprétabilité (Cours 1).
+ÉTAPE 3 — Apprentissage supervisé (3 classes), sélection de modèle et interprétabilité.
+
+Deux jeux de variables sont comparés :
+  A. « explicables » : les 17 variables extraites (compétences, années, diplômes, similarités) ;
+  B. « explicables + embeddings » : A + interactions des embeddings CV / offre (768 dimensions).
 
     python scripts/03_supervise.py
 
-Sorties : models/modele_final.joblib, reports/resultats/03_*, reports/figures/10_* à 17_*
+Sorties : models/modele_final.joblib, reports/resultats/03_*, reports/figures/09_* à 16_*
 """
 import json
 import sys
@@ -16,115 +20,87 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay, roc_auc_score
-from sklearn.model_selection import StratifiedKFold, learning_curve
+from sklearn.model_selection import StratifiedGroupKFold, learning_curve
 
 from recrutement import config as C
-from recrutement import data, explain, supervised as S
+from recrutement import data, explain, features as F, supervised as S
 from recrutement.plots import save
 
 print("=" * 70, "\nÉTAPE 3 — APPRENTISSAGE SUPERVISÉ & INTERPRÉTABILITÉ\n" + "=" * 70)
-train, val, test = data.load_splits()
-X_tr, y_tr = data.X_y(train)
-X_va, y_va = data.X_y(val)
-X_te, y_te = data.X_y(test)
-print(f"Variables utilisées ({len(C.MODEL_FEATURES)}) : {C.MODEL_FEATURES}")
-print(f"Attributs protégés exclus des modèles : {C.PROTECTED}")
+train, val, test = data.charger("train", "val", "test")
+f_tr, f_va, f_te = data.charger("features_train", "features_val", "features_test")
+y_tr, y_va, y_te = train["y"], val["y"], test["y"]
+JEUX = {"explicables": C.FEATURES, "explicables + embeddings": C.FEATURES + F.colonnes_embeddings(f_tr)}
+for nom, cols in JEUX.items():
+    print(f"Jeu « {nom} » : {len(cols)} variables")
 
-# ----------------------------------------------------------------- 1-2. réglage + comparaison
-print("\n1) Hyperparamètres par validation croisée 5 plis (Train) puis comparaison sur Validation :")
-table, fitted = S.tune_and_compare(X_tr, y_tr, X_va, y_va, C.MODEL_FEATURES)
+print("\n1) Validation croisée groupée par offre (Train), puis comparaison sur Validation")
+table, modeles = S.regler_et_comparer(f_tr, y_tr, train["offre_id"], f_va, y_va, JEUX)
 table.to_csv(C.RESULTS_DIR / "03_comparaison_modeles.csv", index=False)
-best_name = table.loc[0, "Modèle"]
-best_params = table.loc[0, "Hyperparamètres"]
-print(f"\n   => Modèle retenu (meilleure AUC sur Validation) : {best_name} {best_params}")
+meilleur = table.loc[0, "Modèle"]
+cols = JEUX[table.loc[0, "Variables"]]
+print(f"\n   => Modèle retenu (meilleure AUC en validation croisée groupée, 238 offres) : {meilleur} "
+      f"{table.loc[0, 'Hyperparamètres']} | contrôle sur Validation : AUC = {table.loc[0, 'AUC macro (OvR) (Val)']:.3f}")
 
-fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-cols = ["ROC-AUC (Val)", "Accuracy équilibrée (Val)", "F1 (Val)"]
-table.set_index("Modèle")[cols].iloc[::-1].plot.barh(ax=axes[0])
-axes[0].set_title("Comparaison des modèles sur la Validation")
-axes[0].set_xlim(0, 1)
-axes[0].legend(fontsize=8, loc="lower right")
-for name, model in fitted.items():
-    RocCurveDisplay.from_estimator(model, X_va, y_va, name=name, ax=axes[1])
-axes[1].plot([0, 1], [0, 1], "k:", lw=1)
-axes[1].set_title("Courbes ROC sur la Validation")
-axes[1].legend(fontsize=7)
-save(fig, "10_comparaison_modeles")
+fig, ax = plt.subplots(figsize=(11, 5.5))
+vue = table.set_index("Modèle")[["AUC macro (OvR) (Val)", "AUC adéquat vs non (Val)", "F1 macro (Val)"]]
+vue.iloc[::-1].plot.barh(ax=ax)
+ax.set_xlim(0, 1)
+ax.set_title("Comparaison des modèles et des jeux de variables (Validation)")
+ax.legend(fontsize=8, loc="lower right")
+save(fig, "09_comparaison_modeles")
 
-# ----------------------------------------------------------------- équité : avec / sans attributs protégés
-best_pipe = fitted[best_name]
-with_protected = clone(best_pipe)
-with_protected.set_params(prep=S.build_pipeline(best_pipe.named_steps["model"], C.ALL_FEATURES).named_steps["prep"])
-with_protected.fit(train[C.ALL_FEATURES], y_tr)
-auc_with = roc_auc_score(y_va, with_protected.predict_proba(val[C.ALL_FEATURES])[:, 1])
-auc_without = table.loc[0, "ROC-AUC (Val)"]
-print(f"\n2) Coût de l'équité : AUC Val sans genre/âge = {auc_without:.3f} | avec genre/âge = {auc_with:.3f}"
-      f" (écart {auc_with - auc_without:+.3f}) -> on exclut les attributs protégés sans perte notable.")
-
-# ----------------------------------------------------------------- courbe d'apprentissage
-print("\n3) Courbe d'apprentissage du modèle retenu (diagnostic biais / variance, Cours 1 slides 45-49)")
-sizes, tr_scores, cv_scores = learning_curve(
-    clone(best_pipe), X_tr, y_tr, cv=StratifiedKFold(5, shuffle=True, random_state=C.RANDOM_STATE),
-    scoring="roc_auc", train_sizes=np.linspace(0.15, 1.0, 7), n_jobs=-1)
+print("\n2) Courbe d'apprentissage (biais / variance, Cours 1 slides 45-49)")
+tailles, sc_tr, sc_cv = learning_curve(
+    clone(modeles[meilleur]), f_tr[cols], y_tr, groups=train["offre_id"],
+    cv=StratifiedGroupKFold(5, shuffle=True, random_state=C.RANDOM_STATE), scoring="roc_auc_ovr",
+    train_sizes=np.linspace(0.2, 1, 5), n_jobs=-1)
 fig, ax = plt.subplots(figsize=(7, 4.5))
-for scores, label in ((tr_scores, "Score d'entraînement"), (cv_scores, "Score de validation croisée")):
-    ax.plot(sizes, scores.mean(axis=1), "o-", label=label)
-    ax.fill_between(sizes, scores.mean(axis=1) - scores.std(axis=1), scores.mean(axis=1) + scores.std(axis=1), alpha=0.2)
-ax.set_title(f"Courbe d'apprentissage — {best_name}")
-ax.set_xlabel("Nombre d'exemples d'entraînement")
-ax.set_ylabel("ROC-AUC")
+for s, lab in ((sc_tr, "Entraînement"), (sc_cv, "Validation croisée")):
+    ax.plot(tailles, s.mean(1), "o-", label=lab)
+    ax.fill_between(tailles, s.mean(1) - s.std(1), s.mean(1) + s.std(1), alpha=0.2)
+ax.set_title(f"Courbe d'apprentissage — {meilleur}")
+ax.set_xlabel("Nombre de paires d'entraînement")
+ax.set_ylabel("AUC macro")
 ax.legend()
-save(fig, "12_courbe_apprentissage")
-gap = tr_scores.mean(axis=1)[-1] - cv_scores.mean(axis=1)[-1]
-print(f"   AUC entraînement = {tr_scores.mean(axis=1)[-1]:.3f} | AUC validation croisée = "
-      f"{cv_scores.mean(axis=1)[-1]:.3f} | écart = {gap:.3f}")
+save(fig, "10_courbe_apprentissage")
+print(f"   AUC entraînement = {sc_tr.mean(1)[-1]:.3f} | validation croisée = {sc_cv.mean(1)[-1]:.3f}")
 
-# ----------------------------------------------------------------- 3-4. ré-entraînement + test
-print("\n4) Ré-entraînement sur Train + Validation, puis évaluation UNIQUE sur Test")
-final = S.refit_on_train_val(best_pipe, X_tr, y_tr, X_va, y_va)
-proba_te = final.predict_proba(X_te)[:, 1]
-test_metrics = S.metrics(y_te, proba_te)
-baseline = S.refit_on_train_val(fitted["Régression logistique (baseline)"], X_tr, y_tr, X_va, y_va)
-baseline_metrics = S.metrics(y_te, baseline.predict_proba(X_te)[:, 1])
-res = pd.DataFrame({best_name: test_metrics, "Régression logistique (baseline)": baseline_metrics}).T
+print("\n3) Ré-entraînement sur Train + Validation, évaluation UNIQUE sur Test")
+final = S.reentrainer(modeles[meilleur], f_tr[cols], y_tr, f_va[cols], y_va)
+cle_base = "Régression softmax (baseline) — explicables"
+base = S.reentrainer(modeles[cle_base], f_tr[C.FEATURES], y_tr, f_va[C.FEATURES], y_va)
+p_te = final.predict_proba(f_te[cols])
+res = pd.DataFrame({meilleur: S.metriques(y_te, p_te),
+                    cle_base: S.metriques(y_te, base.predict_proba(f_te[C.FEATURES]))}).T
 print(res.round(3).to_string())
 res.to_csv(C.RESULTS_DIR / "03_resultats_test.csv")
 
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-ConfusionMatrixDisplay.from_predictions(y_te, (proba_te >= 0.5).astype(int), ax=axes[0], cmap="Blues",
-                                        display_labels=["Rejeté", "Embauché"], colorbar=False)
-axes[0].set_title(f"Matrice de confusion (Test) — {best_name}")
-RocCurveDisplay.from_predictions(y_te, proba_te, name=best_name, ax=axes[1])
-RocCurveDisplay.from_predictions(y_te, baseline.predict_proba(X_te)[:, 1], name="Baseline logistique", ax=axes[1])
-axes[1].plot([0, 1], [0, 1], "k:", lw=1)
-axes[1].set_title("Courbe ROC (Test)")
-save(fig, "11_evaluation_finale_test")
+fig, ax = plt.subplots(figsize=(7, 4.5))
+for k, lab in enumerate(C.LABELS):
+    ax.hist(S.score_attendu(p_te)[y_te.values == k], bins=25, alpha=0.55, density=True, label=C.LABELS_FR[lab])
+ax.set_title("Score d'adéquation prédit selon l'étiquette réelle (Test)")
+ax.set_xlabel("Score attendu (0-100)")
+ax.legend()
+save(fig, "11_score_par_etiquette")
 
 joblib.dump(final, C.MODELS_DIR / "modele_final.joblib")
 with open(C.RESULTS_DIR / "03_modele_retenu.json", "w", encoding="utf-8") as f:
-    json.dump({"modele": best_name, "hyperparametres": best_params, "variables": C.MODEL_FEATURES,
-               "auc_val": round(float(auc_without), 4), "auc_val_avec_attributs_proteges": round(float(auc_with), 4),
-               "test": {k: round(float(v), 4) for k, v in test_metrics.items()}}, f, indent=2, ensure_ascii=False)
+    json.dump({"modele": table.loc[0, "Algorithme"], "jeu_variables": table.loc[0, "Variables"],
+               "hyperparametres": table.loc[0, "Hyperparamètres"], "variables": cols,
+               "test": {k: round(float(v), 4) for k, v in res.loc[meilleur].items()}}, f, indent=2, ensure_ascii=False)
 
-# ----------------------------------------------------------------- interprétabilité
-print("\n5) Interprétabilité")
-exp, Xt = explain.shap_values(final, X_te)
-explain.plot_shap(exp, Xt, y_te, proba_te)
-shap_imp = pd.Series(np.abs(exp.values).mean(axis=0), index=Xt.columns).sort_values(ascending=False)
-print("   SHAP — importance globale moyenne |SHAP| :")
-print(shap_imp.round(3).to_string())
-
-perm = explain.permutation_table(final, X_te, y_te)
-explain.plot_permutation(perm)
+print("\n4) Interprétabilité")
+valeurs, donnees = explain.shap_adapte(final, f_te[cols])
+explain.plot_shap(valeurs, donnees, pd.Series(p_te[:, 2], index=f_te.index), y_te)
+print("   SHAP — importance moyenne |SHAP| (classe « adapté ») :")
+print(valeurs.abs().mean().sort_values(ascending=False).head(10).round(4).to_string())
+perm = explain.permutation(final, f_te[cols], y_te)
 perm.to_csv(C.RESULTS_DIR / "03_importance_permutation.csv", index=False)
-print("   Permutation — baisse d'AUC :")
-print(perm.round(4).to_string(index=False))
-
-err = explain.error_analysis(test, proba_te)
-print("   Analyse des erreurs — profil moyen par type de prédiction :")
-print(err["profil"][["effectif", "SkillScore", "InterviewScore", "PersonalityScore", "EducationLevel",
-                     "RecruitmentStrategy", "proba"]].to_string())
-print(f"   Taux d'erreur par groupe : {err['taux_erreur_par_groupe']}")
-err["profil"].to_csv(C.RESULTS_DIR / "03_analyse_erreurs.csv")
+print("   Permutation — perte d'AUC (6 premières) :")
+print(perm.head(6).round(4).to_string(index=False))
+prof = explain.erreurs(y_te, p_te, f_te[cols])
+print("   Analyse des erreurs (profil moyen par type) :")
+print(prof.to_string())
+prof.to_csv(C.RESULTS_DIR / "03_analyse_erreurs.csv")
 print("\nÉtape 3 terminée.")
