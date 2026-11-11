@@ -47,6 +47,19 @@ def decouper(train_officiel: pd.DataFrame, test_officiel: pd.DataFrame):
     return train_officiel.iloc[i_tr].copy(), train_officiel.iloc[i_va].copy(), test_officiel.copy()
 
 
+def creer_exemples(n_par_etiquette: int = 20, n_candidats: int = 12) -> pd.DataFrame:
+    """
+    Petit échantillon du jeu de TEST pour la démonstration du site (versionné dans Git, < 1 Mo) :
+    n exemples par étiquette + l'offre la plus fréquente avec ses candidats (onglet « classer »).
+    """
+    test = pd.read_csv(C.RAW_DIR / "test.csv")
+    offre = test["job_description_text"].value_counts().index[0]
+    ex = pd.concat([test.groupby("label").sample(n_par_etiquette, random_state=C.RANDOM_STATE),
+                    test[test["job_description_text"] == offre].head(n_candidats)]).drop_duplicates()
+    ex.to_csv(C.EXEMPLES_PATH, index=False)
+    return ex
+
+
 def sauvegarder(**parts) -> None:
     for nom, df in parts.items():
         df.to_pickle(C.DATA_PROCESSED / f"{nom}.pkl")

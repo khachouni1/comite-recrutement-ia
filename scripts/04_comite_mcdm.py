@@ -161,5 +161,6 @@ with open(C.RESULTS_DIR / "04_synthese.json", "w", encoding="utf-8") as f:
                "evaluation": evaluation.set_index("Méthode").round(4).to_dict(orient="index")},
               f, indent=2, ensure_ascii=False)
 joblib.dump(comite, C.MODELS_DIR / "comite.joblib")
-print("\n   comité -> models/comite.joblib")
+data.creer_exemples()
+print("\n   comité -> models/comite.joblib | exemples du site -> data/exemples_demo.csv")
 print("\nÉtape 4 terminée.")

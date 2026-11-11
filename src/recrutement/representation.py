@@ -13,8 +13,12 @@ La similarité CV / offre est mesurée par le cosinus :  cos(u, v) = u·v / (‖
 Tous les apprentissages (vocabulaire TF-IDF, axes LSA) sont faits sur le TRAIN uniquement.
 """
 import hashlib
+import os
 import pickle
 import warnings
+
+# Le protocole de téléchargement « Xet » de Hugging Face s'est bloqué lors des essais : on utilise le HTTP classique.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 import numpy as np
 from sklearn.decomposition import TruncatedSVD

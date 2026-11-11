@@ -9,6 +9,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- chemins
 ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "raw" / "cv_offres"
+EXEMPLES_PATH = ROOT / "data" / "exemples_demo.csv"   # petit échantillon du Test pour le site en ligne
 DATA_PROCESSED = ROOT / "data" / "processed"
 MODELS_DIR = ROOT / "models"
 FIGURES_DIR = ROOT / "reports" / "figures"

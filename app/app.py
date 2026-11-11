@@ -33,14 +33,18 @@ ICONES = {"score_technique": "🛠️", "score_experience": "📈", "score_forma
           "score_soft_skills": "🤝", "score_adequation": "🎯", "score_predictif": "🤖"}
 
 
-@st.cache_resource(show_spinner="Chargement du comité d'agents…")
+@st.cache_resource(show_spinner="Chargement du comité d'agents et du modèle d'embeddings "
+                                "(1er démarrage en ligne : téléchargement d'environ 90 Mo)…")
 def charger_comite():
-    return joblib.load(C.MODELS_DIR / "comite.joblib")
+    comite = joblib.load(C.MODELS_DIR / "comite.joblib")
+    comite.reps._charger_encodeur()  # charge (ou télécharge) le modèle une fois pour toutes
+    return comite
 
 
 @st.cache_data
 def exemples() -> pd.DataFrame:
-    return pd.read_csv(C.RAW_DIR / "test.csv")
+    """Échantillon du jeu de test versionné avec le site (data/exemples_demo.csv)."""
+    return pd.read_csv(C.EXEMPLES_PATH)
 
 
 if not (C.MODELS_DIR / "comite.joblib").exists():

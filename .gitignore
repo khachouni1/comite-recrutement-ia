@@ -9,6 +9,8 @@ venv/
 # Fichiers régénérés par  python scripts/run_all.py
 data/processed/
 models/*.joblib
+# le comité entraîné (35 Mo) est versionné : le site en ligne en a besoin
+!models/comite.joblib
 models/all-MiniLM-L6-v2/
 data/raw/cv_offres/*.csv
 

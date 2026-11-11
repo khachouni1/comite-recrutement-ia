@@ -1,0 +1,23 @@
+# Dépendances du SITE EN LIGNE (Streamlit Community Cloud lit ce fichier en priorité, car il est
+# dans le même dossier que app.py). Python 3.13 à choisir dans « Advanced settings ».
+# Les versions de scikit-learn, imbalanced-learn, xgboost, numpy et scipy doivent être IDENTIQUES à celles
+# qui ont entraîné models/comite.joblib, sinon le comité ne peut pas être rechargé.
+
+# PyTorch en version CPU (la version GPU par défaut sous Linux pèse plusieurs Go)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+
+numpy==2.2.1
+pandas==2.2.3
+scipy==1.18.1
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+xgboost==3.4.1
+joblib==1.6.0
+sentence-transformers==6.2.0
+matplotlib==3.10.0
+seaborn==0.13.2
+plotly==5.24.1
+pypdf==6.21.4
+python-docx==1.2.0
+streamlit==1.66.1

@@ -79,6 +79,9 @@ python -m pytest                   # tests unitaires
 Au premier lancement, le modèle d'embeddings `all-MiniLM-L6-v2` (88 Mo) est téléchargé depuis Hugging Face.
 Pour travailler hors ligne, placez-le dans `models/all-MiniLM-L6-v2/`.
 
+Le comité déjà entraîné est fourni (`models/comite.joblib`) : `streamlit run app/app.py` fonctionne directement,
+sans relancer le pipeline. **Mise en ligne** : voir [DEPLOIEMENT.md](DEPLOIEMENT.md).
+
 ## Structure du projet
 
 ```text
